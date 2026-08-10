@@ -86,14 +86,20 @@ src/main/java/com/sangmyungyaho/barocare/
 4. 코드 리뷰 후 `dev`에 병합합니다.
 5. 배포 시 `dev` → `main` Pull Request를 생성합니다.
 
-## 📝 커밋 메시지 컨벤션
+📋 Commit Message Convention
 
-- `feat` : 새로운 기능 추가
-- `fix` : 버그 수정
-- `docs` : 문서 수정
-- `refactor` : 코드 리팩터링
-- `test` : 테스트 코드 추가 및 수정
-- `chore` : 환경설정 및 기타 작업
+Gitmoji	Tag	Description
+✨	feat	새로운 기능 추가
+🐛	fix	버그 수정
+📝	docs	문서 추가, 수정, 삭제
+✅	test	테스트 코드 추가, 수정, 삭제
+💄	style	코드 형식 변경
+♻️	refactor	코드 리팩토링
+⚡️	perf	성능 개선
+💚	ci	CI 관련 설정 수정
+🚀	chore	기타 변경사항
+🔥️	remove	코드 및 파일 제거
+
 
 ### 예시
 

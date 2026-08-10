@@ -40,5 +40,6 @@ out/
 ### Environment
 .env
 
-
+.claude/
+CLAUDE.md
 .DS_Store
