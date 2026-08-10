@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: barocare
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/barocare
+    username: root
+    password: ${DB_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
