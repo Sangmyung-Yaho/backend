@@ -14,11 +14,14 @@ public record ErrorResponse(
 		return new ErrorResponse(new Error(errorCode.getCode(), errorCode.getMessage()));
 	}
 
+	// code/message에 example을 고정하지 않는다 — 모든 API의 에러 응답이 이 스키마 하나를 공유하기 때문에,
+	// 여기에 example을 박으면 어떤 API/상태코드든 동일한 example만 노출된다.
+	// 실제 API별 example은 각 Controller의 @ApiResponse(content = @Content(examples = @ExampleObject(...)))에서 지정한다.
 	public record Error(
-			@Schema(description = "에러 코드", example = "CHECKIN_ALREADY_EXISTS")
+			@Schema(description = "에러 코드")
 			String code,
 
-			@Schema(description = "에러 메시지", example = "해당 날짜의 체크인이 이미 존재합니다.")
+			@Schema(description = "에러 메시지")
 			String message
 	) {
 	}

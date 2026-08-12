@@ -1,5 +1,6 @@
 package com.sangmyungyaho.barocare.ai.dto;
 
+import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
 import com.sangmyungyaho.barocare.skin.entity.FaceRegion;
 import com.sangmyungyaho.barocare.skin.entity.ImageQualityRating;
 import com.sangmyungyaho.barocare.skin.entity.RednessIntensity;
@@ -52,6 +53,16 @@ public class AiDto {
 			ImageQualityRating blur,
 			ImageQualityRating angle,
 			ImageQualityRating faceRatio
+	) {
+	}
+
+	/**
+	 * 이전/현재 사진 두 장을 비교한 결과. SAFE/CAUTION/DANGER 등급은 여기 없다 —
+	 * 오직 이전 대비 현재의 상대적 변화 방향만 담는다.
+	 */
+	public record SkinComparisonResult(
+			ChangeDirection redness,
+			ChangeDirection trouble
 	) {
 	}
 }

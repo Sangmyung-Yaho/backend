@@ -5,6 +5,7 @@ import com.sangmyungyaho.barocare.skin.dto.SkinAnalysisDto;
 import com.sangmyungyaho.barocare.skin.service.SkinAnalysisService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -35,15 +36,33 @@ public class SkinAnalysisController {
 			),
 			@ApiResponse(
 					responseCode = "400", description = "입력값이 올바르지 않습니다.",
-					content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "BAD_REQUEST",
+									value = "{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"입력값이 올바르지 않습니다.\"}}"
+							)
+					)
 			),
 			@ApiResponse(
 					responseCode = "404", description = "존재하지 않는 피부 이미지입니다.",
-					content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "SKIN_IMAGE_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"SKIN_IMAGE_NOT_FOUND\",\"message\":\"존재하지 않는 피부 이미지입니다.\"}}"
+							)
+					)
 			),
 			@ApiResponse(
 					responseCode = "502", description = "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.",
-					content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "AI_ANALYSIS_FAILED",
+									value = "{\"error\":{\"code\":\"AI_ANALYSIS_FAILED\",\"message\":\"AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.\"}}"
+							)
+					)
 			)
 	})
 	@PostMapping("/api/v1/skin-analyses")
