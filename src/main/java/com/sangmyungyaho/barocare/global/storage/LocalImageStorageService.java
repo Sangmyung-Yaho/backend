@@ -8,8 +8,10 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -49,6 +51,19 @@ public class LocalImageStorageService implements ImageStorageService {
 			return new StoredImage(storedFileName, url);
 		} catch (IOException e) {
 			throw new GlobalException(ErrorCode.INVALID_IMAGE);
+		}
+	}
+
+	@Override
+	public Optional<byte[]> load(String directory, String storedFileName) {
+		Path targetPath = baseDir.resolve(directory).resolve(storedFileName);
+		if (!Files.isRegularFile(targetPath)) {
+			return Optional.empty();
+		}
+		try {
+			return Optional.of(Files.readAllBytes(targetPath));
+		} catch (IOException e) {
+			throw new UncheckedIOException(e);
 		}
 	}
 
