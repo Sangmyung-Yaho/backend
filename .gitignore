@@ -43,6 +43,9 @@ out/
 ### Local image storage (MVP, 추후 S3 등으로 교체 예정)
 /uploads/
 
+### 애플리케이션 파일 로그
+/logs/
+
 .claude/
 CLAUDE.md
 .DS_Store

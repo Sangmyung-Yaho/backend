@@ -13,6 +13,7 @@ import java.time.LocalDate;
 
 public class CheckinDto {
 
+	@Schema(name = "CheckinRequest")
 	public record Request(
 			@Schema(description = "수면 시간(시간 단위, 소수 입력 가능)", example = "6")
 			@NotNull(message = "수면 시간은 필수입니다.")
@@ -44,6 +45,7 @@ public class CheckinDto {
 		}
 	}
 
+	@Schema(name = "CheckinResponse")
 	public record Response(
 			@Schema(description = "체크인 ID", example = "23")
 			@JsonProperty("checkin_id")

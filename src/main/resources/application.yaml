@@ -17,6 +17,10 @@ spring:
   ai:
     openai:
       api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          # 이미지(멀티모달) 입력을 지원하는 모델로 명시. TODO: 모델/비용 정책 확정되면 조정.
+          model: gpt-4o-mini
 
   servlet:
     multipart:
@@ -30,3 +34,8 @@ app:
     local:
       base-dir: uploads
       url-prefix: /uploads
+
+# TODO: 장애 진단용 파일 로깅. 운영 로그 정책(로테이션/보관기간 등)이 정해지면 재검토.
+logging:
+  file:
+    name: logs/barocare.log

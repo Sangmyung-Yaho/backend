@@ -8,6 +8,7 @@ import java.time.Instant;
 
 public class SkinImageDto {
 
+	@Schema(name = "SkinImageResponse")
 	public record Response(
 			@Schema(description = "피부 이미지 ID", example = "55")
 			@JsonProperty("skin_image_id")
