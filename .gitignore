@@ -40,6 +40,9 @@ out/
 ### Environment
 .env
 
+### Local image storage (MVP, 추후 S3 등으로 교체 예정)
+/uploads/
+
 .claude/
 CLAUDE.md
 .DS_Store

@@ -17,3 +17,16 @@ spring:
   ai:
     openai:
       api-key: ${OPENAI_API_KEY}
+
+  servlet:
+    multipart:
+      # TODO: 파일 크기 제한 기획이 확정되면 실제 정책에 맞게 조정한다. 현재는 Spring 기본값(1MB)이
+      # 너무 작아 정상적인 이미지 업로드도 막을 수 있어 넉넉한 값으로만 완화해둔다.
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+app:
+  storage:
+    local:
+      base-dir: uploads
+      url-prefix: /uploads
