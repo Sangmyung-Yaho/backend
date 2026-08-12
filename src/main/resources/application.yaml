@@ -18,6 +18,16 @@ spring:
     openai:
       api-key: ${OPENAI_API_KEY}
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+jwt:
+  secret: ${JWT_SECRET}
+  access-expiration: 3600000 # 1시간 (ms)
+  refresh-expiration: 1209600000 # 14일 (ms)
+
   servlet:
     multipart:
       # TODO: 파일 크기 제한 기획이 확정되면 실제 정책에 맞게 조정한다. 현재는 Spring 기본값(1MB)이
