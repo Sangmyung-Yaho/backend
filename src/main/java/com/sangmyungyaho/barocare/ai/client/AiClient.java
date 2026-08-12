@@ -75,6 +75,40 @@ public class AiClient {
 			네 가지 관점에서 각각 GOOD 또는 POOR로만 판정하라. 어느 하나라도 판단하기 어려울 정도로 나쁘면 POOR로 표시하라.
 			""";
 
+	/**
+	 * 비교 프롬프트 버전. 이 프롬프트를 수정하면 함께 올린다.
+	 */
+	public static final String COMPARISON_SCHEMA_VERSION = "v1-comparison";
+
+	/**
+	 * 이전/현재 사진 두 장을 비교하는 "변화 방향 추출" 프롬프트.
+	 * 중요: 이 호출은 SAFE/CAUTION/DANGER를 다시 판정하지 않는다. 오직 이전 대비 현재의
+	 * 상대적인 변화(증가/유지/감소)만 비교한다.
+	 */
+	private static final String SKIN_COMPARISON_SYSTEM_PROMPT = """
+			너는 같은 사람의 얼굴 사진 두 장을 비교해서, 피부 상태가 이전 사진 대비 현재 사진에서
+			어떻게 달라졌는지만 보고하는 도구다. 최종 등급(SAFE/CAUTION/DANGER)은 판단하지 않는다.
+
+			첫 번째로 첨부된 이미지는 "이전" 사진이고, 두 번째로 첨부된 이미지는 "현재" 사진이다.
+			항상 이전 → 현재 방향의 변화만 보고한다.
+
+			다음 원칙을 반드시 지켜라.
+			- 질환명 또는 의학적 진단을 생성하지 않는다.
+			- 조명, 촬영 각도, 사진 화질, 카메라 차이만으로 변화가 있다고 판단하지 않는다.
+			  두 사진의 촬영 조건이 다를 수 있음을 감안해 보수적으로 판단하라.
+			- 변화가 명확하지 않거나 확신이 서지 않으면 STABLE을 선택한다.
+
+			[붉은기(redness) 변화 판단 기준]
+			- 붉은 영역의 범위(퍼진 정도)가 이전보다 넓어졌는지 좁아졌는지
+			- 붉은기의 시각적 강도(옅음/진함)가 이전보다 강해졌는지 약해졌는지
+			위 두 기준을 종합해 INCREASED(증가) / STABLE(유지) / DECREASED(감소) 중 하나를 선택하라.
+
+			[트러블(trouble) 변화 판단 기준]
+			- 눈에 보이는 트러블의 수/밀도가 이전보다 늘었는지 줄었는지
+			- 트러블이 나타나는 범위(부위 수)가 이전보다 넓어졌는지 좁아졌는지
+			위 두 기준을 종합해 INCREASED(증가) / STABLE(유지) / DECREASED(감소) 중 하나를 선택하라.
+			""";
+
 	private final ChatClient chatClient;
 
 	public AiClient(ChatClient.Builder chatClientBuilder) {
@@ -110,6 +144,46 @@ public class AiClient {
 		} catch (Exception e) {
 			// OpenAI 원문 오류 메시지는 서버 로그에만 남기고, 클라이언트에는 노출하지 않는다.
 			log.warn("피부 이미지 AI 관찰값 추출 실패(OpenAI 호출 또는 응답 파싱 단계)", e);
+			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+		}
+	}
+
+	/**
+	 * 이전/현재 얼굴 이미지 두 장을 함께 OpenAI에 전달해 redness/trouble의 상대적 변화 방향을 받는다.
+	 * SAFE/CAUTION/DANGER는 다시 판정하지 않는다.
+	 *
+	 * @param previousImageBytes 이전 사진 바이트
+	 * @param previousMimeType   이전 사진 MIME 타입
+	 * @param currentImageBytes  현재 사진 바이트
+	 * @param currentMimeType    현재 사진 MIME 타입
+	 * @return 구조화된 변화 비교 결과
+	 * @throws GlobalException AI_ANALYSIS_FAILED - API 호출 실패 또는 응답 파싱/형식 오류 시
+	 */
+	public AiDto.SkinComparisonResult compareSkin(
+			byte[] previousImageBytes, MimeType previousMimeType,
+			byte[] currentImageBytes, MimeType currentMimeType
+	) {
+		try {
+			Media previousMedia = Media.builder()
+					.mimeType(previousMimeType)
+					.data(new ByteArrayResource(previousImageBytes))
+					.build();
+			Media currentMedia = Media.builder()
+					.mimeType(currentMimeType)
+					.data(new ByteArrayResource(currentImageBytes))
+					.build();
+
+			AiDto.SkinComparisonResult result = chatClient.prompt()
+					.system(SKIN_COMPARISON_SYSTEM_PROMPT)
+					.user(u -> u.text("첫 번째 이미지는 이전 사진, 두 번째 이미지는 현재 사진이다. 두 사진을 비교해줘.")
+							.media(previousMedia, currentMedia))
+					.call()
+					.entity(AiDto.SkinComparisonResult.class);
+
+			log.info("AI 비교 결과 수신: redness={}, trouble={}", result.redness(), result.trouble());
+			return result;
+		} catch (Exception e) {
+			log.warn("피부 사진 비교 실패(OpenAI 호출 또는 응답 파싱 단계)", e);
 			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
 		}
 	}

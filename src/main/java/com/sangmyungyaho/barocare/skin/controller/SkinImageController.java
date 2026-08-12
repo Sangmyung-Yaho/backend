@@ -6,6 +6,7 @@ import com.sangmyungyaho.barocare.skin.service.SkinImageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -37,7 +38,13 @@ public class SkinImageController {
 			),
 			@ApiResponse(
 					responseCode = "400", description = "유효한 이미지 파일을 업로드해주세요.",
-					content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "INVALID_IMAGE",
+									value = "{\"error\":{\"code\":\"INVALID_IMAGE\",\"message\":\"유효한 이미지 파일을 업로드해주세요.\"}}"
+							)
+					)
 			)
 	})
 	@PostMapping(value = "/api/v1/skin-images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

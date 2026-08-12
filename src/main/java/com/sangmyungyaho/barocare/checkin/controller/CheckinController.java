@@ -5,6 +5,7 @@ import com.sangmyungyaho.barocare.checkin.service.CheckinService;
 import com.sangmyungyaho.barocare.global.exception.ErrorResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -32,11 +33,23 @@ public class CheckinController {
 			),
 			@ApiResponse(
 					responseCode = "400", description = "입력값이 올바르지 않습니다.",
-					content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "BAD_REQUEST",
+									value = "{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"입력값이 올바르지 않습니다.\"}}"
+							)
+					)
 			),
 			@ApiResponse(
 					responseCode = "409", description = "해당 날짜의 체크인이 이미 존재합니다.",
-					content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "CHECKIN_ALREADY_EXISTS",
+									value = "{\"error\":{\"code\":\"CHECKIN_ALREADY_EXISTS\",\"message\":\"해당 날짜의 체크인이 이미 존재합니다.\"}}"
+							)
+					)
 			)
 	})
 	@PostMapping("/api/v1/checkins")
