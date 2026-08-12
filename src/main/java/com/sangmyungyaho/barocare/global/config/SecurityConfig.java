@@ -37,8 +37,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 스웨거 UI 및 API 문서화 경로는 항상 열어둠
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-resources/**").permitAll()
-                        // 로그인, 회원가입 관련 API는 누구나 접근 가능
-                        .requestMatchers("/api/auth/**").permitAll()
+                        // 로그인, 회원가입 관련 API 및 기본 에러 처리는 누구나 접근 가능
+                        .requestMatchers("/api/v1/auth/**", "/error").permitAll()
                         // 그 외의 모든 요청은 인증 필요 (막아둠)
                         .anyRequest().authenticated()
                 )
