@@ -6,7 +6,9 @@ import com.sangmyungyaho.barocare.skin.entity.SkinAnalysisLevel;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 public class SkinAnalysisDto {
 
@@ -52,6 +54,82 @@ public class SkinAnalysisDto {
 					skinAnalysis.getTroubleLevel(),
 					skinAnalysis.getSkinLevel(),
 					skinAnalysis.getAnalyzedAt()
+			);
+		}
+	}
+
+	/**
+	 * 피부 분석 히스토리 조회(Issue #20) 응답.
+	 *
+	 * API 명세는 redness_score/trouble_score(숫자 점수) 기준이지만, 현재 SkinAnalysis는
+	 * SAFE/CAUTION/DANGER 3단계 등급만 저장하고 숫자 점수 필드가 없다(SkinGradeRubric 참고).
+	 * 임의로 점수를 만들어내지 않고, 실제 저장된 등급을 redness_level/trouble_level로 노출한다.
+	 * average도 산술 평균이 아니라 조회 기간의 최빈 등급(동률이면 더 위험한 등급 우선)이다.
+	 */
+	@Schema(name = "SkinAnalysisHistoryResponse")
+	public record HistoryResponse(
+			@Schema(description = "조회 기간(일)", example = "28")
+			@JsonProperty("period_days")
+			Integer periodDays,
+
+			@Schema(description = "조회 기간 내 가장 최근 분석 결과. 기록이 없으면 null.", nullable = true)
+			LevelPoint latest,
+
+			@Schema(
+					description = "조회 기간 내 대표 등급. 산술 평균이 아니라 최빈 등급이며, "
+							+ "동률이면 더 위험한 등급을 우선한다(DANGER > CAUTION > SAFE). 기록이 없으면 null.",
+					nullable = true
+			)
+			LevelPoint average,
+
+			@Schema(description = "조회 기간 내 분석 이력(날짜 오름차순)")
+			List<HistoryItem> history
+	) {
+
+		public static HistoryResponse empty(Integer periodDays) {
+			return new HistoryResponse(periodDays, null, null, List.of());
+		}
+	}
+
+	@Schema(name = "SkinAnalysisLevelPoint")
+	public record LevelPoint(
+			@Schema(description = "붉은기 등급", example = "CAUTION")
+			@JsonProperty("redness_level")
+			SkinAnalysisLevel rednessLevel,
+
+			@Schema(description = "트러블 등급", example = "SAFE")
+			@JsonProperty("trouble_level")
+			SkinAnalysisLevel troubleLevel
+	) {
+
+		public static LevelPoint of(SkinAnalysisLevel rednessLevel, SkinAnalysisLevel troubleLevel) {
+			return new LevelPoint(rednessLevel, troubleLevel);
+		}
+
+		public static LevelPoint from(SkinAnalysis skinAnalysis) {
+			return new LevelPoint(skinAnalysis.getRednessLevel(), skinAnalysis.getTroubleLevel());
+		}
+	}
+
+	@Schema(name = "SkinAnalysisHistoryItem")
+	public record HistoryItem(
+			@Schema(description = "분석 날짜", example = "2026-08-10")
+			LocalDate date,
+
+			@Schema(description = "붉은기 등급", example = "CAUTION")
+			@JsonProperty("redness_level")
+			SkinAnalysisLevel rednessLevel,
+
+			@Schema(description = "트러블 등급", example = "SAFE")
+			@JsonProperty("trouble_level")
+			SkinAnalysisLevel troubleLevel
+	) {
+
+		public static HistoryItem from(SkinAnalysis skinAnalysis) {
+			return new HistoryItem(
+					skinAnalysis.getAnalyzedAt().toLocalDate(),
+					skinAnalysis.getRednessLevel(),
+					skinAnalysis.getTroubleLevel()
 			);
 		}
 	}

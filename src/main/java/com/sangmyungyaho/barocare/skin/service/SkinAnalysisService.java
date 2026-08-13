@@ -19,8 +19,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.MimeType;
 import org.springframework.util.MimeTypeUtils;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -86,6 +92,57 @@ public class SkinAnalysisService {
 		);
 
 		return SkinAnalysisDto.Response.from(skinAnalysisRepository.save(skinAnalysis));
+	}
+
+	/**
+	 * 피부 분석 히스토리 조회(Issue #20).
+	 * period(일) 동안의 분석 이력을, 등급(SAFE/CAUTION/DANGER) 기준으로 반환한다.
+	 * average는 산술 평균이 아니라 최빈 등급이다 — {@link #calculateModeLevel} 참고.
+	 */
+	public SkinAnalysisDto.HistoryResponse getHistory(int periodDays) {
+		LocalDateTime from = LocalDate.now().minusDays(periodDays - 1L).atStartOfDay();
+		List<SkinAnalysis> analyses = skinAnalysisRepository.findByAnalyzedAtGreaterThanEqualOrderByAnalyzedAtAsc(from);
+
+		if (analyses.isEmpty()) {
+			log.info("피부 분석 히스토리 없음: periodDays={}, from={}", periodDays, from);
+			return SkinAnalysisDto.HistoryResponse.empty(periodDays);
+		}
+
+		// 오름차순 정렬된 리스트이므로 마지막 원소가 곧 최신 분석이다.
+		SkinAnalysis latest = analyses.get(analyses.size() - 1);
+		SkinAnalysisLevel rednessMode = calculateModeLevel(analyses, SkinAnalysis::getRednessLevel);
+		SkinAnalysisLevel troubleMode = calculateModeLevel(analyses, SkinAnalysis::getTroubleLevel);
+
+		List<SkinAnalysisDto.HistoryItem> history = analyses.stream()
+				.map(SkinAnalysisDto.HistoryItem::from)
+				.toList();
+
+		log.info("피부 분석 히스토리 조회 완료: periodDays={}, count={}, latestId={}, rednessMode={}, troubleMode={}",
+				periodDays, analyses.size(), latest.getId(), rednessMode, troubleMode);
+
+		return new SkinAnalysisDto.HistoryResponse(
+				periodDays,
+				SkinAnalysisDto.LevelPoint.from(latest),
+				SkinAnalysisDto.LevelPoint.of(rednessMode, troubleMode),
+				history
+		);
+	}
+
+	/**
+	 * 조회 기간 내 최빈 등급을 계산한다. 동률이면 더 위험한 등급을 우선한다
+	 * (SkinAnalysisLevel 선언 순서 = 위험도 순서: SAFE < CAUTION < DANGER, ordinal 비교로 판단).
+	 * 산술 평균이 존재하지 않는 등급형 데이터라 "평균" 대신 대표값으로 사용한다.
+	 */
+	private SkinAnalysisLevel calculateModeLevel(List<SkinAnalysis> analyses, Function<SkinAnalysis, SkinAnalysisLevel> levelExtractor) {
+		Map<SkinAnalysisLevel, Long> countsByLevel = analyses.stream()
+				.map(levelExtractor)
+				.collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
+
+		return countsByLevel.entrySet().stream()
+				.max(Comparator.<Map.Entry<SkinAnalysisLevel, Long>>comparingLong(Map.Entry::getValue)
+						.thenComparing(entry -> entry.getKey().ordinal()))
+				.map(Map.Entry::getKey)
+				.orElseThrow(); // analyses가 비어있지 않음을 호출부에서 보장하므로 도달하지 않는다.
 	}
 
 	/**
