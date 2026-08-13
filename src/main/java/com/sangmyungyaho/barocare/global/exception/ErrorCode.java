@@ -10,7 +10,9 @@ public enum ErrorCode {
 	SKIN_IMAGE_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 피부 이미지입니다."),
 	SKIN_IMAGE_FILE_NOT_FOUND(HttpStatus.INTERNAL_SERVER_ERROR, "이미지 파일을 찾을 수 없습니다."),
 	SKIN_ANALYSIS_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 피부 분석입니다."),
-	AI_ANALYSIS_FAILED(HttpStatus.BAD_GATEWAY, "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.");
+	AI_ANALYSIS_FAILED(HttpStatus.BAD_GATEWAY, "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요."),
+	CHECKIN_NOT_FOUND(HttpStatus.NOT_FOUND, "원인 분석에 필요한 체크인 기록이 없습니다."),
+	INSUFFICIENT_ANALYSIS_DATA(HttpStatus.UNPROCESSABLE_CONTENT, "피부 변화를 비교하기 위한 기록이 충분하지 않습니다.");
 
 	private final HttpStatus status;
 	private final String message;

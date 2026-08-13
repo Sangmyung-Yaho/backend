@@ -1,4 +1,10 @@
 spring:
+  # 프로젝트 루트의 .env를 자동으로 읽어들인다(Properties 형식으로 취급). 파일이 없어도(optional) 기동은
+  # 계속 진행되며, 그 경우 아래 ${...} 플레이스홀더들은 여전히 값을 요구하므로 관련 에러가 그대로 발생한다.
+  # 즉 .env를 만들어두기만 하면 IntelliJ Run Configuration이나 터미널에 환경변수를 별도로 등록할 필요가 없다.
+  config:
+    import: optional:file:.env[.properties]
+
   application:
     name: barocare
 
@@ -19,13 +25,17 @@ spring:
       api-key: ${OPENAI_API_KEY}
       chat:
         options:
-          # 이미지(멀티모달) 입력을 지원하는 모델로 명시. TODO: 모델/비용 정책 확정되면 조정.
           model: gpt-4o-mini
 
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
 
 oauth2:
   kakao:
@@ -41,15 +51,8 @@ oauth2:
 
 jwt:
   secret: ${JWT_SECRET}
-  access-expiration: 3600000 # 1시간 (ms)
-  refresh-expiration: 1209600000 # 14일 (ms)
-
-  servlet:
-    multipart:
-      # TODO: 파일 크기 제한 기획이 확정되면 실제 정책에 맞게 조정한다. 현재는 Spring 기본값(1MB)이
-      # 너무 작아 정상적인 이미지 업로드도 막을 수 있어 넉넉한 값으로만 완화해둔다.
-      max-file-size: 10MB
-      max-request-size: 10MB
+  access-expiration: 3600000
+  refresh-expiration: 1209600000
 
 app:
   storage:
@@ -57,7 +60,6 @@ app:
       base-dir: uploads
       url-prefix: /uploads
 
-# TODO: 장애 진단용 파일 로깅. 운영 로그 정책(로테이션/보관기간 등)이 정해지면 재검토.
 logging:
   file:
     name: logs/barocare.log
