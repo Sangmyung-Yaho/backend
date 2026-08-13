@@ -38,9 +38,9 @@ OPENAI_API_KEY=
 
 ### 실행
 
-IntelliJ의 Run Configuration에 필요한 환경변수를 등록한 후 실행합니다.
-
-또는 터미널에서:
+`.env` 파일을 프로젝트 루트에 만들어두면 Spring Boot가 기동 시 자동으로 읽어들입니다
+(`spring.config.import=optional:file:.env[.properties]`). IntelliJ Run Configuration이나
+터미널에 환경변수를 별도로 등록할 필요 없이 그대로 실행하면 됩니다.
 
 ```bash
 ./gradlew bootRun
