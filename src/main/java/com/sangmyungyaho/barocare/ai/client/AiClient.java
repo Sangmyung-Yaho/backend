@@ -109,6 +109,35 @@ public class AiClient {
 			위 두 기준을 종합해 INCREASED(증가) / STABLE(유지) / DECREASED(감소) 중 하나를 선택하라.
 			""";
 
+	/**
+	 * 피부 변화 원인 분석(REP-101) 프롬프트 버전. 이 프롬프트를 수정하면 함께 올린다.
+	 */
+	public static final String CAUSE_ANALYSIS_SCHEMA_VERSION = "v1-cause-analysis";
+
+	/**
+	 * 피부 변화 원인 후보 "해석" 프롬프트.
+	 * 중요: redness/trouble의 점수·변화량·상태는 이미 Java(SkinAnalysisLevel 서수값, SkinComparison 변화 방향)가
+	 * 확정적으로 계산해 전달한다. GPT는 이 숫자를 다시 계산하거나 새로운 점수를 만들어내지 않는다 -
+	 * 오직 이미 계산된 결과와 체크인 데이터 사이의 인과관계를 해석하고 자연어로 설명하는 역할만 한다.
+	 */
+	private static final String CAUSE_ANALYSIS_SYSTEM_PROMPT = """
+			너는 사용자의 피부 변화 분석 결과와 생활습관 체크인 데이터를 보고, 피부 변화의 주요 원인 후보를
+			해석해서 설명하는 도구다.
+
+			다음 원칙을 반드시 지켜라.
+			- redness/trouble의 점수, 변화량, 상태(IMPROVED/WORSENED/UNCHANGED)는 이미 계산되어 주어진 값이다.
+			  너는 이 값을 새로 계산하거나 추정하지 않는다. 그대로 인용해서 해석에만 사용하라.
+			- 피부 점수(숫자)를 새로 만들어내지 않는다. 네 응답에는 점수 필드 자체가 없다.
+			- 원인 후보(factor)는 반드시 SLEEP(수면) / STRESS(스트레스) / WATER_INTAKE(수분 섭취) 중에서만 고른다.
+			  이 세 가지 외의 요인(식습관, 화장품, 날씨 등)은 체크인 데이터에 없으므로 언급하지 않는다.
+			- 실제로 피부 변화와 관련 있어 보이는 요인만 causes에 포함한다. 억지로 개수를 채우지 않으며,
+			  뚜렷한 원인이 없으면 causes를 빈 목록으로 반환해도 된다.
+			- 각 원인 후보의 name은 "수면 부족"처럼 짧은 한국어 라벨, description은 해당 체크인 값(최근값/평균)과
+			  피부 변화를 근거로 1~2문장으로 설명한다.
+			- 질환명 또는 의학적 진단을 생성하지 않는다.
+			- summary는 전체 원인을 한 문장으로 요약한다.
+			""";
+
 	private final ChatClient chatClient;
 
 	public AiClient(ChatClient.Builder chatClientBuilder) {
@@ -186,5 +215,55 @@ public class AiClient {
 			log.warn("피부 사진 비교 실패(OpenAI 호출 또는 응답 파싱 단계)", e);
 			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
 		}
+	}
+
+	/**
+	 * 이미 계산된 피부 변화 결과와 체크인 데이터를 근거로 원인 후보 해석과 요약을 받는다.
+	 * redness/trouble 점수·변화량·상태는 여기서 다시 계산하지 않고 입력값을 그대로 GPT에 전달한다.
+	 *
+	 * @param skinChange 이미 계산된 redness/trouble 변화 결과(점수 아님, 변화량과 상태만)
+	 * @param checkin    최근 체크인 값과 그 이전 체크인들의 평균(비교 대상이 없으면 average*는 null)
+	 * @return AI가 해석한 원인 후보 목록과 요약
+	 * @throws GlobalException AI_ANALYSIS_FAILED - API 호출 실패 또는 응답 파싱/형식 오류 시
+	 */
+	public AiDto.CauseAnalysisResult analyzeSkinChangeCauses(AiDto.SkinChangeInput skinChange, AiDto.CheckinInput checkin) {
+		try {
+			AiDto.CauseAnalysisResult result = chatClient.prompt()
+					.system(CAUSE_ANALYSIS_SYSTEM_PROMPT)
+					.user(buildCauseAnalysisUserText(skinChange, checkin))
+					.call()
+					.entity(AiDto.CauseAnalysisResult.class);
+
+			log.info("AI 원인 분석 결과 수신: causes={}, summary={}", result.causes(), result.summary());
+			return result;
+		} catch (Exception e) {
+			log.warn("피부 변화 원인 분석 실패(OpenAI 호출 또는 응답 파싱 단계)", e);
+			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+		}
+	}
+
+	private String buildCauseAnalysisUserText(AiDto.SkinChangeInput skinChange, AiDto.CheckinInput checkin) {
+		return """
+				[피부 변화 결과 - 이미 계산된 값, 다시 계산하지 말 것]
+				- redness(붉은기) 변화량: %d, 상태: %s
+				- trouble(트러블) 변화량: %d, 상태: %s
+
+				[체크인 데이터]
+				- 최근 수면 시간: %s시간 (이전 체크인 평균: %s시간)
+				- 최근 스트레스 지수(1~5): %s (이전 체크인 평균: %s)
+				- 최근 수분 섭취량(ml): %s (이전 체크인 평균: %sml)
+
+				위 데이터를 바탕으로 피부 변화의 주요 원인 후보를 해석해줘.
+				""".formatted(
+				skinChange.rednessChange(), skinChange.rednessStatus(),
+				skinChange.troubleChange(), skinChange.troubleStatus(),
+				checkin.latestSleepHours(), formatNullable(checkin.averageSleepHours()),
+				checkin.latestStressLevel(), formatNullable(checkin.averageStressLevel()),
+				checkin.latestWaterIntakeMl(), formatNullable(checkin.averageWaterIntakeMl())
+		);
+	}
+
+	private String formatNullable(Double value) {
+		return value == null ? "비교할 이전 기록 없음" : value.toString();
 	}
 }

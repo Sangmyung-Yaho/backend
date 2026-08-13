@@ -1,5 +1,7 @@
 package com.sangmyungyaho.barocare.ai.dto;
 
+import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
+import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
 import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
 import com.sangmyungyaho.barocare.skin.entity.FaceRegion;
 import com.sangmyungyaho.barocare.skin.entity.ImageQualityRating;
@@ -63,6 +65,50 @@ public class AiDto {
 	public record SkinComparisonResult(
 			ChangeDirection redness,
 			ChangeDirection trouble
+	) {
+	}
+
+	/**
+	 * 피부 변화 원인 분석(REP-101)에 전달하는 입력값. 점수/변화량/상태는 이미 Java에서 확정적으로
+	 * 계산된 값이며, AI는 이 값을 그대로 참고할 뿐 다시 계산하거나 새로운 점수를 만들지 않는다.
+	 */
+	public record SkinChangeInput(
+			Integer rednessChange,
+			ReportChangeStatus rednessStatus,
+			Integer troubleChange,
+			ReportChangeStatus troubleStatus
+	) {
+	}
+
+	/**
+	 * 원인 분석에 참고하는 체크인 데이터. average* 필드는 최신 체크인을 제외한 이전 체크인들의 평균이며,
+	 * 비교할 이전 체크인이 없으면 null이다(둘 다 Java가 계산해서 전달하는 값 - AI는 계산하지 않는다).
+	 */
+	public record CheckinInput(
+			Double latestSleepHours,
+			Integer latestStressLevel,
+			Integer latestWaterIntakeMl,
+			Double averageSleepHours,
+			Double averageStressLevel,
+			Double averageWaterIntakeMl
+	) {
+	}
+
+	/**
+	 * AI가 반환하는 원인 후보 해석. factor는 {@link ReportCauseFactor}로 제한되어 있어
+	 * Checkin에 실제로 존재하는 요인 밖의 값을 반환할 수 없다. currentValue/unit은 여기 없다 -
+	 * Checkin 실측값으로 Java가 채운다(REP-101 원칙: AI는 해석/설명만 담당).
+	 */
+	public record CauseAnalysisResult(
+			List<Cause> causes,
+			String summary
+	) {
+	}
+
+	public record Cause(
+			ReportCauseFactor factor,
+			String name,
+			String description
 	) {
 	}
 }
