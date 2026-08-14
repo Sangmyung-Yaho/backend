@@ -49,6 +49,7 @@ public class AuthController {
                     .queryParam("response_type", "code")
                     .queryParam("client_id", kakaoClientId)
                     .queryParam("redirect_uri", kakaoRedirectUri)
+                    .queryParam("prompt", "login")
                     .build().toUriString();
         } else if ("google".equalsIgnoreCase(provider)) {
             redirectUrl = UriComponentsBuilder
