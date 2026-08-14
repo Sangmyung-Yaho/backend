@@ -61,4 +61,37 @@ public class UserService {
 
         return new com.sangmyungyaho.barocare.user.dto.ProfileUpdateResponseDto(waterGoalMl);
     }
+
+    @Transactional(readOnly = true)
+    public com.sangmyungyaho.barocare.user.dto.ProfileReadResponseDto getProfile(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("유저를 찾을 수 없습니다. id=" + userId));
+
+        return new com.sangmyungyaho.barocare.user.dto.ProfileReadResponseDto(
+                user.getNickname(),
+                user.getHeight(),
+                user.getWeight(),
+                user.getSkinType(),
+                user.isPushMarketing(),
+                user.getWaterGoalMl()
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public com.sangmyungyaho.barocare.user.dto.AgreementResponseDto getAgreements(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("유저를 찾을 수 없습니다. id=" + userId));
+
+        return new com.sangmyungyaho.barocare.user.dto.AgreementResponseDto(user.isPushMarketing());
+    }
+
+    @Transactional
+    public void updateAgreements(Long userId, com.sangmyungyaho.barocare.user.dto.AgreementRequestDto request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("유저를 찾을 수 없습니다. id=" + userId));
+
+        if (request.getMarketingAgreed() != null) {
+            user.updateMarketingAgreement(request.getMarketingAgreed());
+        }
+    }
 }
