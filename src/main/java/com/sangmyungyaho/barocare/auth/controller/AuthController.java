@@ -84,4 +84,15 @@ public class AuthController {
 
         response.sendRedirect(redirectUrl);
     }
+
+    @Operation(summary = "로그아웃", description = "Redis에 저장된 Refresh Token을 삭제하여 로그아웃 처리합니다.")
+    @PostMapping("/logout")
+    public org.springframework.http.ResponseEntity<java.util.Map<String, String>> logout(@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        Long userId = Long.parseLong(userDetails.getUsername());
+        authService.logout(userId);
+
+        java.util.Map<String, String> responseBody = new java.util.HashMap<>();
+        responseBody.put("message", "로그아웃 되었습니다.");
+        return org.springframework.http.ResponseEntity.ok(responseBody);
+    }
 }
