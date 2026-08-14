@@ -52,6 +52,19 @@ public class User extends BaseTimeEntity {
     @Column(name = "push_marketing", nullable = false)
     private boolean pushMarketing;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "skin_type", length = 20)
+    private SkinType skinType;
+
+    @Column(name = "height")
+    private Double height;
+
+    @Column(name = "weight")
+    private Double weight;
+
+    @Column(name = "water_goal_ml")
+    private Integer waterGoalMl;
+
     @Builder
     public User(Provider provider, String socialId, String nickname) {
         this.provider = provider;
@@ -74,5 +87,24 @@ public class User extends BaseTimeEntity {
     
     public void deleteUser() {
         this.status = UserStatus.DELETED;
+    }
+
+    public void updateProfile(String nickname, Double height, Double weight, SkinType skinType, Integer waterGoalMl) {
+        if (nickname != null) {
+            this.nickname = nickname;
+        }
+        if (height != null) {
+            this.height = height;
+        }
+        if (weight != null) {
+            this.weight = weight;
+        }
+        if (skinType != null) {
+            this.skinType = skinType;
+        }
+        if (waterGoalMl != null) {
+            this.waterGoalMl = waterGoalMl;
+        }
+        this.isOnboarded = true;
     }
 }

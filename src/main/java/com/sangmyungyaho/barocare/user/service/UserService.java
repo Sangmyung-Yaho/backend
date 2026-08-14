@@ -28,4 +28,37 @@ public class UserService {
 
         return new OnboardingStatusResponseDto(userInfo);
     }
+    @Transactional
+    public com.sangmyungyaho.barocare.user.dto.ProfileUpdateResponseDto updateProfile(Long userId, com.sangmyungyaho.barocare.user.dto.ProfileUpdateRequestDto request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("유저를 찾을 수 없습니다. id=" + userId));
+
+        Double height = request.getHeight() != null ? request.getHeight() : user.getHeight();
+        Double weight = request.getWeight() != null ? request.getWeight() : user.getWeight();
+
+        Integer waterGoalMl = null;
+        if (height != null && weight != null && height > 0) {
+            double heightInMeters = height / 100.0;
+            double bmi = weight / (heightInMeters * heightInMeters);
+            int coefficient;
+            if (bmi < 18.5) {
+                coefficient = 35;
+            } else if (bmi < 23.0) {
+                coefficient = 33;
+            } else {
+                coefficient = 30;
+            }
+            waterGoalMl = (int) (weight * coefficient);
+        }
+
+        user.updateProfile(
+                request.getNickname(),
+                request.getHeight(),
+                request.getWeight(),
+                request.getSkinType(),
+                waterGoalMl
+        );
+
+        return new com.sangmyungyaho.barocare.user.dto.ProfileUpdateResponseDto(waterGoalMl);
+    }
 }
