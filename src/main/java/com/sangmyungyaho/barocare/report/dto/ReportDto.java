@@ -5,6 +5,7 @@ import com.sangmyungyaho.barocare.report.entity.Report;
 import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
 import com.sangmyungyaho.barocare.report.entity.WarningLevel;
+import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.LocalDate;
@@ -63,6 +64,28 @@ public class ReportDto {
 	) {
 	}
 
+	@Schema(name = "ReportCauseInteractionResponse")
+	public record Interaction(
+			@Schema(description = "함께 관찰된 원인 요인 조합(2개 이상)", example = "[\"SLEEP\", \"STRESS\"]")
+			List<ReportCauseFactor> factors,
+
+			@Schema(
+					description = "요인 조합에 대한 설명. 의료적 인과관계(\"~ 때문에 발생했다\")로 단정하지 않고, "
+							+ "함께 관찰되었다는 사실과 가능성만 서술한다.",
+					example = "수면 부족과 높은 스트레스가 함께 관찰되었어요. 두 요인이 피부 컨디션 변화와 함께 나타났을 가능성이 있어요."
+			)
+			String message
+	) {
+	}
+
+	@Schema(name = "ReportCauseInteractionsResponse")
+	public record InteractionsResponse(
+			@Schema(description = "최신 원인 리포트의 primary_causes 기준으로 2개 이상 요인이 함께 관찰된 조합 설명 목록. "
+					+ "해당하는 조합이 없으면 빈 배열.")
+			List<Interaction> interactions
+	) {
+	}
+
 	@Schema(name = "ReportSkinLatestResponse")
 	public record Response(
 			@Schema(description = "리포트 ID", example = "101")
@@ -92,6 +115,31 @@ public class ReportDto {
 			);
 			return new Response(report.getId(), report.getReportDate(), skinChange, primaryCauses, report.getSummary());
 		}
+	}
+
+	@Schema(name = "ReportSkinSignalItemResponse")
+	public record SkinSignalItem(
+			@Schema(
+					description = "이전 대비 현재의 변화 방향. 같은 (current, previous) SkinAnalysis 쌍의 SkinComparison이 "
+							+ "이미 있으면 그 값(AI 이미지 비교 판단)을 사용하고, 없으면 Report의 등급 변화(status)를 "
+							+ "대체 신호로 사용한다.",
+					example = "DECREASED"
+			)
+			ChangeDirection direction,
+
+			@Schema(description = "신호 카드 문구", example = "이전보다 붉은기가 감소했어요.")
+			String message
+	) {
+	}
+
+	@Schema(name = "ReportSkinSignalResponse")
+	public record SkinSignalResponse(
+			@Schema(description = "붉은기 변화 신호")
+			SkinSignalItem redness,
+
+			@Schema(description = "트러블 변화 신호")
+			SkinSignalItem trouble
+	) {
 	}
 
 	@Schema(name = "ReportCauseWarningResponse")
