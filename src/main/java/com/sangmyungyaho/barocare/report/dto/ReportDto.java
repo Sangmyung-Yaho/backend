@@ -6,12 +6,52 @@ import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
 import com.sangmyungyaho.barocare.report.entity.WarningLevel;
 import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
+import com.sangmyungyaho.barocare.skin.entity.SkinAnalysisLevel;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.LocalDate;
 import java.util.List;
 
 public class ReportDto {
+
+	/**
+	 * 리포트 보관함 목록(ISSUE-29, GET /api/v1/reports) 전용 요약 DTO.
+	 * 화면(날짜별 기록 목록)에 필요한 최소 필드만 담는다 - 목록에서는 primary_causes/skin_change 같은
+	 * 상세 필드까지 내려줄 필요가 없다. skin_level(SAFE/CAUTION/DANGER)은 Report 자체가 아니라
+	 * 연관된 currentSkinAnalysis의 값을 그대로 재사용한다(위험도 배지 표시용).
+	 */
+	@Schema(name = "ReportListItemResponse")
+	public record ReportListItem(
+			@Schema(description = "리포트 ID", example = "101")
+			@JsonProperty("report_id")
+			Long reportId,
+
+			@Schema(description = "리포트 기준일(현재 SkinAnalysis의 분석일)", example = "2026-08-10")
+			@JsonProperty("report_date")
+			LocalDate reportDate,
+
+			@Schema(description = "위험도 배지 표시용 등급. currentSkinAnalysis의 skinLevel을 그대로 사용한다.", example = "CAUTION")
+			@JsonProperty("skin_level")
+			SkinAnalysisLevel skinLevel,
+
+			@Schema(description = "원인 분석 요약", example = "최근 트러블 증가는 수면 부족과 높은 스트레스의 영향을 받았을 가능성이 있어요.")
+			String summary
+	) {
+
+		public static ReportListItem from(Report report) {
+			return new ReportListItem(
+					report.getId(), report.getReportDate(), report.getCurrentSkinAnalysis().getSkinLevel(), report.getSummary()
+			);
+		}
+	}
+
+	@Schema(name = "ReportListResponse")
+	public record ListResponse(
+			@Schema(description = "리포트 목록(최신순). date 파라미터로 필터링된 경우 해당 날짜의 리포트만 담긴다. "
+					+ "조회 결과가 없으면 빈 배열.")
+			List<ReportListItem> reports
+	) {
+	}
 
 	@Schema(name = "ReportSkinChangeItemResponse")
 	public record SkinChangeItem(

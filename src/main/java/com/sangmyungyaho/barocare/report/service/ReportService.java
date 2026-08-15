@@ -72,6 +72,39 @@ public class ReportService {
 	}
 
 	/**
+	 * 리포트 보관함 목록(ISSUE-29, GET /api/v1/reports).
+	 *
+	 * 이미 DB에 생성되어 있는 Report만 조회한다 - find-or-create를 수행하는 getLatestSkinReport()와
+	 * 달리 새로운 분석/저장을 유발하지 않으므로 OpenAI를 호출하지 않는다. date가 주어지면 해당 날짜의
+	 * 리포트만, 없으면 전체 리포트를 최신순(reportDate desc, 동일 날짜면 id desc)으로 반환한다.
+	 * 결과가 없으면 에러 없이 빈 목록을 반환한다.
+	 *
+	 * 이번 이슈 범위에서는 userId 기반 사용자별 분리를 다루지 않는다(기존 Report/Checkin/SkinAnalysis와
+	 * 동일하게 전역 데이터 기준) - 관련 TODO는 ReportRepository에 남겨둔다.
+	 */
+	public ReportDto.ListResponse getReports(LocalDate date) {
+		List<Report> reports = date != null
+				? reportRepository.findByReportDateOrderByIdDesc(date)
+				: reportRepository.findAllByOrderByReportDateDescIdDesc();
+		List<ReportDto.ReportListItem> items = reports.stream()
+				.map(ReportDto.ReportListItem::from)
+				.toList();
+		return new ReportDto.ListResponse(items);
+	}
+
+	/**
+	 * 리포트 상세 조회(ISSUE-29, GET /api/v1/reports/{reportId}).
+	 *
+	 * 기존 getLatestSkinReport()가 쓰는 것과 동일한 ReportDto.Response/parsePrimaryCauses를 그대로
+	 * 재사용한다 - id로 조회한다는 점만 다르고 새로운 분석/저장은 일으키지 않는다.
+	 */
+	public ReportDto.Response getReport(Long reportId) {
+		Report report = reportRepository.findById(reportId)
+				.orElseThrow(() -> new GlobalException(ErrorCode.REPORT_NOT_FOUND));
+		return ReportDto.Response.of(report, parsePrimaryCauses(report.getPrimaryCausesJson()));
+	}
+
+	/**
 	 * 고위험 조합 경고(ISSUE-27, GET /api/v1/reports/causes/latest/warnings).
 	 *
 	 * 최신 원인 리포트를 새로 계산하지 않고 getLatestSkinReport()를 그대로 호출해 primaryCauses를

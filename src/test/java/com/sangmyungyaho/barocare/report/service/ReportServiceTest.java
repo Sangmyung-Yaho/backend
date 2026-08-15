@@ -2,6 +2,8 @@ package com.sangmyungyaho.barocare.report.service;
 
 import com.sangmyungyaho.barocare.ai.client.AiClient;
 import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
+import com.sangmyungyaho.barocare.global.exception.ErrorCode;
+import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.report.dto.ReportDto;
 import com.sangmyungyaho.barocare.report.entity.Report;
 import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
@@ -10,6 +12,7 @@ import com.sangmyungyaho.barocare.report.entity.WarningLevel;
 import com.sangmyungyaho.barocare.report.repository.ReportRepository;
 import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
 import com.sangmyungyaho.barocare.skin.entity.SkinAnalysis;
+import com.sangmyungyaho.barocare.skin.entity.SkinAnalysisLevel;
 import com.sangmyungyaho.barocare.skin.entity.SkinComparison;
 import com.sangmyungyaho.barocare.skin.repository.SkinAnalysisRepository;
 import com.sangmyungyaho.barocare.skin.repository.SkinComparisonRepository;
@@ -25,11 +28,14 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -195,6 +201,92 @@ class ReportServiceTest {
 		assertThat(response.redness().message()).isEqualTo("붉은기가 이전과 비슷한 상태예요.");
 		assertThat(response.trouble().direction()).isEqualTo(ChangeDirection.STABLE);
 		assertThat(response.trouble().message()).isEqualTo("트러블이 이전과 비슷한 상태예요.");
+	}
+
+	@Test
+	void date_파라미터가_없으면_전체_리포트를_최신순으로_조회한다() {
+		Report report = reportSummaryOf(101L, LocalDate.of(2026, 8, 10), SkinAnalysisLevel.CAUTION, "요약1");
+		when(reportRepository.findAllByOrderByReportDateDescIdDesc()).thenReturn(List.of(report));
+
+		ReportDto.ListResponse response = reportService.getReports(null);
+
+		assertThat(response.reports()).hasSize(1);
+		ReportDto.ReportListItem item = response.reports().get(0);
+		assertThat(item.reportId()).isEqualTo(101L);
+		assertThat(item.reportDate()).isEqualTo(LocalDate.of(2026, 8, 10));
+		assertThat(item.skinLevel()).isEqualTo(SkinAnalysisLevel.CAUTION);
+		assertThat(item.summary()).isEqualTo("요약1");
+		verify(reportRepository).findAllByOrderByReportDateDescIdDesc();
+		verifyNoMoreInteractions(reportRepository);
+	}
+
+	@Test
+	void date_파라미터가_있으면_해당_날짜의_리포트만_조회한다() {
+		LocalDate date = LocalDate.of(2026, 8, 7);
+		Report report = reportSummaryOf(55L, date, SkinAnalysisLevel.SAFE, "요약2");
+		when(reportRepository.findByReportDateOrderByIdDesc(date)).thenReturn(List.of(report));
+
+		ReportDto.ListResponse response = reportService.getReports(date);
+
+		assertThat(response.reports()).hasSize(1);
+		assertThat(response.reports().get(0).reportId()).isEqualTo(55L);
+		verify(reportRepository).findByReportDateOrderByIdDesc(date);
+		verifyNoMoreInteractions(reportRepository);
+	}
+
+	@Test
+	void 조회_결과가_없으면_빈_배열을_반환한다() {
+		when(reportRepository.findAllByOrderByReportDateDescIdDesc()).thenReturn(List.of());
+
+		ReportDto.ListResponse response = reportService.getReports(null);
+
+		assertThat(response.reports()).isEmpty();
+	}
+
+	@Test
+	void 존재하는_reportId면_기존_ReportDto_Response를_그대로_반환한다() {
+		Report report = mock(Report.class);
+		when(report.getId()).thenReturn(7L);
+		when(report.getReportDate()).thenReturn(LocalDate.of(2026, 8, 1));
+		when(report.getRednessPreviousScore()).thenReturn(1);
+		when(report.getRednessCurrentScore()).thenReturn(0);
+		when(report.getRednessStatus()).thenReturn(ReportChangeStatus.IMPROVED);
+		when(report.getTroublePreviousScore()).thenReturn(0);
+		when(report.getTroubleCurrentScore()).thenReturn(0);
+		when(report.getTroubleStatus()).thenReturn(ReportChangeStatus.UNCHANGED);
+		when(report.getPrimaryCausesJson()).thenReturn("[]");
+		when(report.getSummary()).thenReturn("요약3");
+		when(reportRepository.findById(7L)).thenReturn(Optional.of(report));
+		when(objectMapper.readValue(eq("[]"), org.mockito.ArgumentMatchers.<tools.jackson.core.type.TypeReference<List<ReportDto.PrimaryCause>>>any()))
+				.thenReturn(List.of());
+
+		ReportDto.Response response = reportService.getReport(7L);
+
+		assertThat(response.reportId()).isEqualTo(7L);
+		assertThat(response.summary()).isEqualTo("요약3");
+		assertThat(response.primaryCauses()).isEmpty();
+	}
+
+	@Test
+	void 존재하지_않는_reportId면_REPORT_NOT_FOUND_예외를_던진다() {
+		when(reportRepository.findById(999L)).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> reportService.getReport(999L))
+				.isInstanceOf(GlobalException.class)
+				.extracting("errorCode")
+				.isEqualTo(ErrorCode.REPORT_NOT_FOUND);
+	}
+
+	private Report reportSummaryOf(Long id, LocalDate reportDate, SkinAnalysisLevel skinLevel, String summary) {
+		SkinAnalysis currentSkinAnalysis = mock(SkinAnalysis.class);
+		when(currentSkinAnalysis.getSkinLevel()).thenReturn(skinLevel);
+
+		Report report = mock(Report.class);
+		when(report.getId()).thenReturn(id);
+		when(report.getReportDate()).thenReturn(reportDate);
+		when(report.getCurrentSkinAnalysis()).thenReturn(currentSkinAnalysis);
+		when(report.getSummary()).thenReturn(summary);
+		return report;
 	}
 
 	private void stubExistingReport(SkinAnalysis current, SkinAnalysis previous, Report report) {
