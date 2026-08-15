@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.sangmyungyaho.barocare.report.entity.Report;
 import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
+import com.sangmyungyaho.barocare.report.entity.WarningLevel;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.LocalDate;
@@ -91,5 +92,28 @@ public class ReportDto {
 			);
 			return new Response(report.getId(), report.getReportDate(), skinChange, primaryCauses, report.getSummary());
 		}
+	}
+
+	@Schema(name = "ReportCauseWarningResponse")
+	public record Warning(
+			@Schema(description = "경고 위험도", example = "HIGH")
+			WarningLevel level,
+
+			@Schema(description = "이 경고를 발생시킨 원인 요인 조합", example = "[\"SLEEP\", \"STRESS\"]")
+			List<ReportCauseFactor> factors,
+
+			@Schema(description = "경고 카드 제목", example = "고위험 조합 감지")
+			String title,
+
+			@Schema(description = "경고 카드 본문", example = "수면 부족과 높은 스트레스가 함께 확인됐어요.")
+			String message
+	) {
+	}
+
+	@Schema(name = "ReportCauseWarningsResponse")
+	public record WarningsResponse(
+			@Schema(description = "최신 원인 리포트 기준으로 감지된 고위험 조합 경고 목록. 없으면 빈 배열.")
+			List<Warning> warnings
+	) {
 	}
 }

@@ -50,6 +50,7 @@ public class ReportService {
 	private final ReportRepository reportRepository;
 	private final AiClient aiClient;
 	private final ObjectMapper objectMapper;
+	private final CauseCombinationRubric causeCombinationRubric;
 
 	// currentSkinAnalysisId 기준 동시 생성 방지용 락(단일 인스턴스 기준). DB unique 제약이 최종 안전장치이므로
 	// 여기서는 "같은 순간에 들어온 요청이 OpenAI를 중복 호출하지 않도록" 최소화하는 목적만 가진다.
@@ -74,6 +75,21 @@ public class ReportService {
 
 		Report saved = createReport(current, previous);
 		return ReportDto.Response.of(saved, parsePrimaryCauses(saved.getPrimaryCausesJson()));
+	}
+
+	/**
+	 * 고위험 조합 경고(ISSUE-27, GET /api/v1/reports/causes/latest/warnings).
+	 *
+	 * 최신 원인 리포트를 새로 계산하지 않고 getLatestSkinReport()를 그대로 호출해 primaryCauses를
+	 * 재사용한다(체크인 원본을 다시 조회/계산하지 않음). 데이터가 없거나 부족하면 getLatestSkinReport()가
+	 * 던지는 예외(SKIN_ANALYSIS_NOT_FOUND 등)가 그대로 전파된다 - 고위험 조합이 "없는" 것과
+	 * 원인 리포트 자체가 "없는" 것은 다른 상황이므로 구분한다. 매칭되는 고위험 조합이 없을 때만
+	 * 빈 warnings 배열을 반환한다.
+	 */
+	public ReportDto.WarningsResponse getLatestCauseWarnings() {
+		ReportDto.Response latestReport = getLatestSkinReport();
+		List<ReportDto.Warning> warnings = causeCombinationRubric.evaluate(latestReport.primaryCauses());
+		return new ReportDto.WarningsResponse(warnings);
 	}
 
 	private Report createReport(SkinAnalysis current, SkinAnalysis previous) {
