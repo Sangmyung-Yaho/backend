@@ -10,8 +10,11 @@ import com.sangmyungyaho.barocare.report.dto.ReportDto;
 import com.sangmyungyaho.barocare.report.entity.Report;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
 import com.sangmyungyaho.barocare.report.repository.ReportRepository;
+import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
 import com.sangmyungyaho.barocare.skin.entity.SkinAnalysis;
+import com.sangmyungyaho.barocare.skin.entity.SkinComparison;
 import com.sangmyungyaho.barocare.skin.repository.SkinAnalysisRepository;
+import com.sangmyungyaho.barocare.skin.repository.SkinComparisonRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,7 +31,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 피부 변화 원인 분석 리포트(REP-101, GET /api/v1/reports/skin/latest).
+ * 피부 변화 원인 분석 리포트(REP-101, GET /api/v1/reports/skin/latest 및 ISSUE-28 파생 API들).
  *
  * 최신 SkinAnalysis를 기준으로 find-or-create 방식으로 동작한다: 이미 해당 SkinAnalysis로 생성된
  * Report가 있으면 재사용하고, 없을 때만 AiClient(원인 해석)를 호출해 새로 계산/저장한다. 따라서 같은
@@ -38,6 +41,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * 둘 다 이 서비스가 change 값 하나로 계산한다 - AI(SkinComparisonService의 이미지 비교 판단)에 기대지
  * 않으므로 score와 status가 서로 다른 기준으로 어긋날 수 없다. AI(AiClient)는 원인 후보 해석과
  * 자연어 설명/요약 생성에만 사용한다.
+ *
+ * ISSUE-28(복합 원인 분석 및 피부 변화 설명): getLatestSkinReport()가 내부적으로 의존하는
+ * find-or-create 로직(getOrCreateLatestReport)을 공유해, 여러 API가 같은 최신 Report를 새로
+ * 계산하지 않고 재사용하도록 한다. 이번 이슈에서는 userId 기반 사용자별 데이터 분리를 다루지
+ * 않는다(기존 Checkin/SkinAnalysis와 동일하게 전역 최신값 기준으로 조회) - 관련 TODO는
+ * Checkin/SkinAnalysis 엔티티에 그대로 남겨둔다.
  */
 @Service
 @RequiredArgsConstructor
@@ -51,30 +60,15 @@ public class ReportService {
 	private final AiClient aiClient;
 	private final ObjectMapper objectMapper;
 	private final CauseCombinationRubric causeCombinationRubric;
+	private final SkinComparisonRepository skinComparisonRepository;
 
 	// currentSkinAnalysisId 기준 동시 생성 방지용 락(단일 인스턴스 기준). DB unique 제약이 최종 안전장치이므로
 	// 여기서는 "같은 순간에 들어온 요청이 OpenAI를 중복 호출하지 않도록" 최소화하는 목적만 가진다.
 	private final Map<Long, Object> reportCreationLocks = new ConcurrentHashMap<>();
 
 	public ReportDto.Response getLatestSkinReport() {
-		List<SkinAnalysis> latestAnalyses = skinAnalysisRepository.findTop2ByOrderByAnalyzedAtDesc();
-		if (latestAnalyses.isEmpty()) {
-			throw new GlobalException(ErrorCode.SKIN_ANALYSIS_NOT_FOUND);
-		}
-		if (latestAnalyses.size() < 2) {
-			throw new GlobalException(ErrorCode.INSUFFICIENT_ANALYSIS_DATA);
-		}
-		SkinAnalysis current = latestAnalyses.get(0);
-		SkinAnalysis previous = latestAnalyses.get(1);
-
-		Optional<Report> existing = reportRepository.findByCurrentSkinAnalysis_Id(current.getId());
-		if (existing.isPresent()) {
-			log.info("기존 리포트 재사용: reportId={}, currentSkinAnalysisId={}", existing.get().getId(), current.getId());
-			return ReportDto.Response.of(existing.get(), parsePrimaryCauses(existing.get().getPrimaryCausesJson()));
-		}
-
-		Report saved = createReport(current, previous);
-		return ReportDto.Response.of(saved, parsePrimaryCauses(saved.getPrimaryCausesJson()));
+		Report report = getOrCreateLatestReport();
+		return ReportDto.Response.of(report, parsePrimaryCauses(report.getPrimaryCausesJson()));
 	}
 
 	/**
@@ -90,6 +84,79 @@ public class ReportService {
 		ReportDto.Response latestReport = getLatestSkinReport();
 		List<ReportDto.Warning> warnings = causeCombinationRubric.evaluate(latestReport.primaryCauses());
 		return new ReportDto.WarningsResponse(warnings);
+	}
+
+	/**
+	 * 원인 요인 상호작용 설명(ISSUE-28, GET /api/v1/reports/causes/latest/interactions).
+	 *
+	 * getLatestCauseWarnings()와 같은 방식으로 getLatestSkinReport()의 primaryCauses를 재사용하고,
+	 * CauseCombinationRubric의 조합 매칭 규칙(#27과 동일한 매칭 로직)을 그대로 재사용하되, 의료적
+	 * 인과관계로 단정하지 않는 상호작용 전용 문구로 응답을 구성한다. 함께 관찰된 조합이 없으면
+	 * 에러 없이 빈 interactions 배열을 반환한다.
+	 */
+	public ReportDto.InteractionsResponse getLatestCauseInteractions() {
+		ReportDto.Response latestReport = getLatestSkinReport();
+		List<ReportDto.Interaction> interactions = causeCombinationRubric.interactions(latestReport.primaryCauses());
+		return new ReportDto.InteractionsResponse(interactions);
+	}
+
+	/**
+	 * 피부 컨디션 신호 카드(ISSUE-28, GET /api/v1/reports/causes/latest/skin-signal).
+	 *
+	 * fallback 우선순위(신규 Vision/OpenAI 호출 및 SkinComparison 신규 생성 금지):
+	 * 1) 최신 리포트가 참조하는 (current, previous) SkinAnalysis 쌍에 대해 이미 계산된 SkinComparison이
+	 *    있으면 그 ChangeDirection(AI 이미지 비교 판단)을 그대로 사용한다.
+	 * 2) 없으면 Report에 이미 저장된 redness/trouble의 ReportChangeStatus(SkinAnalysisLevel 서수
+	 *    변화로 이 서비스가 계산한 값)를 ChangeDirection으로 매핑해 대체 신호로 사용한다.
+	 */
+	public ReportDto.SkinSignalResponse getLatestSkinSignal() {
+		Report report = getOrCreateLatestReport();
+		Long currentSkinAnalysisId = report.getCurrentSkinAnalysis().getId();
+		Long previousSkinAnalysisId = report.getPreviousSkinAnalysis().getId();
+
+		Optional<SkinComparison> comparison = skinComparisonRepository
+				.findByCurrentSkinAnalysis_IdAndPreviousSkinAnalysis_Id(currentSkinAnalysisId, previousSkinAnalysisId);
+
+		if (comparison.isPresent()) {
+			log.info("skin-signal: 기존 SkinComparison 재사용(AI Vision 재호출 없음): skinComparisonId={}", comparison.get().getId());
+		} else {
+			log.info("skin-signal: SkinComparison 없음 - Report의 등급 변화(status)를 대체 신호로 사용: reportId={}", report.getId());
+		}
+
+		ChangeDirection rednessDirection = comparison.map(SkinComparison::getRednessChange)
+				.orElseGet(() -> toChangeDirection(report.getRednessStatus()));
+		ChangeDirection troubleDirection = comparison.map(SkinComparison::getTroubleChange)
+				.orElseGet(() -> toChangeDirection(report.getTroubleStatus()));
+
+		ReportDto.SkinSignalItem redness = new ReportDto.SkinSignalItem(rednessDirection, rednessSignalMessage(rednessDirection));
+		ReportDto.SkinSignalItem trouble = new ReportDto.SkinSignalItem(troubleDirection, troubleSignalMessage(troubleDirection));
+		return new ReportDto.SkinSignalResponse(redness, trouble);
+	}
+
+	/**
+	 * 최신 SkinAnalysis 기준 Report를 find-or-create로 반환한다(REP-101 핵심 로직).
+	 * getLatestSkinReport() DTO 변환뿐 아니라, Report 엔티티가 가진 연관 SkinAnalysis(id)나
+	 * status가 그대로 필요한 skin-signal(ISSUE-28) 같은 기능에서도 재사용한다 - 새로운 분석/저장을
+	 * 유발하지 않고 항상 같은 find-or-create 결과를 공유하기 위함이다.
+	 */
+	private Report getOrCreateLatestReport() {
+		List<SkinAnalysis> latestAnalyses = skinAnalysisRepository.findTop2ByOrderByAnalyzedAtDesc();
+		if (latestAnalyses.isEmpty()) {
+			throw new GlobalException(ErrorCode.SKIN_ANALYSIS_NOT_FOUND);
+		}
+		if (latestAnalyses.size() < 2) {
+			throw new GlobalException(ErrorCode.INSUFFICIENT_ANALYSIS_DATA);
+		}
+		SkinAnalysis current = latestAnalyses.get(0);
+		SkinAnalysis previous = latestAnalyses.get(1);
+
+		Optional<Report> existing = reportRepository.findByCurrentSkinAnalysis_Id(current.getId());
+		if (existing.isPresent()) {
+			log.info("기존 리포트 재사용: reportId={}, currentSkinAnalysisId={}", existing.get().getId(), current.getId());
+			return existing.get();
+		}
+
+		return createReport(current, previous);
 	}
 
 	private Report createReport(SkinAnalysis current, SkinAnalysis previous) {
@@ -183,6 +250,33 @@ public class ReportService {
 			return ReportChangeStatus.WORSENED;
 		}
 		return ReportChangeStatus.UNCHANGED;
+	}
+
+	// skin-signal(ISSUE-28)에서 SkinComparison이 없을 때의 대체 신호 변환.
+	// Report.status는 SkinAnalysisLevel ordinal 변화(등급이 좋아짐/유지/나빠짐)로 계산되므로,
+	// 그 의미를 그대로 ChangeDirection(감소/유지/증가)에 대응시킨다: 등급이 좋아짐(IMPROVED) = 감소(DECREASED).
+	private ChangeDirection toChangeDirection(ReportChangeStatus status) {
+		return switch (status) {
+			case IMPROVED -> ChangeDirection.DECREASED;
+			case UNCHANGED -> ChangeDirection.STABLE;
+			case WORSENED -> ChangeDirection.INCREASED;
+		};
+	}
+
+	private String rednessSignalMessage(ChangeDirection direction) {
+		return switch (direction) {
+			case DECREASED -> "이전보다 붉은기가 감소했어요.";
+			case STABLE -> "붉은기가 이전과 비슷한 상태예요.";
+			case INCREASED -> "이전보다 붉은기가 증가했어요.";
+		};
+	}
+
+	private String troubleSignalMessage(ChangeDirection direction) {
+		return switch (direction) {
+			case DECREASED -> "이전보다 트러블이 감소했어요.";
+			case STABLE -> "트러블이 이전과 비슷한 상태예요.";
+			case INCREASED -> "이전보다 트러블이 증가했어요.";
+		};
 	}
 
 	private ReportDto.PrimaryCause enrichCause(AiDto.Cause cause, Checkin latestCheckin) {
