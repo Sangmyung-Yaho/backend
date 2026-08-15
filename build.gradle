@@ -51,6 +51,9 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	// ReportRepository의 신규 조회 쿼리(@DataJpaTest)를 검증하기 위한 인메모리 DB.
+	// 운영 스키마/데이터소스에는 영향 없음(테스트 전용 의존성).
+	testImplementation 'com.h2database:h2'
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	testAnnotationProcessor 'org.projectlombok:lombok'
