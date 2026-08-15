@@ -5,6 +5,7 @@ import com.sangmyungyaho.barocare.global.response.ApiResponse;
 import com.sangmyungyaho.barocare.report.dto.ReportDto;
 import com.sangmyungyaho.barocare.report.service.ReportService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -13,7 +14,11 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.time.LocalDate;
 
 @RestController
 @RequiredArgsConstructor
@@ -21,6 +26,74 @@ import org.springframework.web.bind.annotation.RestController;
 public class ReportController {
 
 	private final ReportService reportService;
+
+	@Operation(
+			summary = "리포트 보관함 목록 조회(ISSUE-29)",
+			description = "이미 생성되어 있는 Report만 조회한다(새로운 분석/저장 없음, OpenAI 재호출 없음). "
+					+ "date 쿼리 파라미터가 있으면 해당 날짜의 리포트만, 없으면 전체 리포트를 최신순으로 반환한다. "
+					+ "조회 결과가 없으면 에러 없이 빈 배열을 반환한다."
+	)
+	@ApiResponses({
+			@io.swagger.v3.oas.annotations.responses.ApiResponse(
+					responseCode = "200",
+					description = "조회 성공. 응답 본문은 ApiResponse로 래핑되며, reports는 data 필드 안에 담긴다"
+							+ "(결과가 없으면 data.reports가 빈 배열).",
+					content = @Content(
+							schema = @Schema(implementation = ReportDto.ListResponse.class),
+							examples = {
+									@ExampleObject(
+											name = "목록 조회",
+											value = "{\"is_success\":true,\"message\":\"리포트 목록을 조회했습니다.\","
+													+ "\"data\":{\"reports\":[{\"report_id\":101,\"report_date\":\"2026-08-10\","
+													+ "\"skin_level\":\"CAUTION\",\"summary\":\"최근 트러블 증가는 수면 부족과 "
+													+ "높은 스트레스의 영향을 받았을 가능성이 있어요.\"}]}}"
+									),
+									@ExampleObject(
+											name = "결과 없음",
+											value = "{\"is_success\":true,\"message\":\"리포트 목록을 조회했습니다.\","
+													+ "\"data\":{\"reports\":[]}}"
+									)
+							}
+					)
+			)
+	})
+	@GetMapping("/api/v1/reports")
+	public ResponseEntity<ApiResponse<ReportDto.ListResponse>> getReports(
+			@Parameter(description = "조회할 리포트 기준일(YYYY-MM-DD). 생략하면 전체 리포트를 최신순으로 조회한다.", example = "2026-08-07")
+			@RequestParam(required = false) LocalDate date
+	) {
+		ReportDto.ListResponse response = reportService.getReports(date);
+		return ResponseEntity.ok(ApiResponse.success("리포트 목록을 조회했습니다.", response));
+	}
+
+	@Operation(
+			summary = "리포트 상세 조회(ISSUE-29)",
+			description = "reportId로 특정 리포트를 상세 조회한다. GET /api/v1/reports/skin/latest와 동일한 "
+					+ "ReportDto.Response를 그대로 재사용하며, 새로운 분석/저장이나 OpenAI 재호출은 발생하지 않는다."
+	)
+	@ApiResponses({
+			@io.swagger.v3.oas.annotations.responses.ApiResponse(
+					responseCode = "200", description = "조회 성공",
+					content = @Content(schema = @Schema(implementation = ReportDto.Response.class))
+			),
+			@io.swagger.v3.oas.annotations.responses.ApiResponse(
+					responseCode = "404", description = "존재하지 않는 리포트입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "REPORT_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"REPORT_NOT_FOUND\",\"message\":\"존재하지 않는 리포트입니다.\"}}"
+							)
+					)
+			)
+	})
+	@GetMapping("/api/v1/reports/{reportId}")
+	public ResponseEntity<ReportDto.Response> getReport(
+			@Parameter(description = "조회할 리포트 ID", example = "101")
+			@PathVariable Long reportId
+	) {
+		return ResponseEntity.ok(reportService.getReport(reportId));
+	}
 
 	@Operation(
 			summary = "최신 피부 변화 원인 리포트 조회",
