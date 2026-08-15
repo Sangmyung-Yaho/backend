@@ -65,4 +65,16 @@ public class UserController {
 
         return ResponseEntity.ok(ApiResponse.success("마케팅 수신 동의 상태가 변경되었습니다.", null));
     }
+
+    @Operation(summary = "회원 탈퇴", description = "유저 계정과 연관된 전체 데이터를 영구 삭제하고 탈퇴 사유를 기록합니다.")
+    @DeleteMapping("/me")
+    public ResponseEntity<ApiResponse<Void>> withdraw(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @RequestBody com.sangmyungyaho.barocare.user.dto.WithdrawRequestDto request) {
+
+        Long userId = Long.parseLong(userDetails.getUsername());
+        userService.withdraw(userId, request);
+
+        return ResponseEntity.ok(ApiResponse.success("회원 탈퇴가 정상적으로 처리되었습니다. 이용해 주셔서 감사합니다.", null));
+    }
 }
