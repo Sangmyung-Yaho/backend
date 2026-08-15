@@ -31,4 +31,38 @@ public class UserController {
 
         return ResponseEntity.ok(ApiResponse.success("프로필 정보가 수정되었습니다.", responseDto));
     }
+
+    @Operation(summary = "프로필 정보 조회", description = "유저의 프로필 정보(닉네임, 키, 몸무게, 피부타입 등)를 조회합니다.")
+    @GetMapping("/profile")
+    public ResponseEntity<ApiResponse<com.sangmyungyaho.barocare.user.dto.ProfileReadResponseDto>> getProfile(
+            @AuthenticationPrincipal UserDetails userDetails) {
+
+        Long userId = Long.parseLong(userDetails.getUsername());
+        com.sangmyungyaho.barocare.user.dto.ProfileReadResponseDto responseDto = userService.getProfile(userId);
+
+        return ResponseEntity.ok(ApiResponse.success("내 정보를 성공적으로 조회했습니다.", responseDto));
+    }
+
+    @Operation(summary = "마케팅 수신 동의여부 조회", description = "유저의 마케팅 수신 동의 상태를 조회합니다.")
+    @GetMapping("/me/agreements")
+    public ResponseEntity<ApiResponse<com.sangmyungyaho.barocare.user.dto.AgreementResponseDto>> getAgreements(
+            @AuthenticationPrincipal UserDetails userDetails) {
+
+        Long userId = Long.parseLong(userDetails.getUsername());
+        com.sangmyungyaho.barocare.user.dto.AgreementResponseDto responseDto = userService.getAgreements(userId);
+
+        return ResponseEntity.ok(ApiResponse.success("약관 동의 내역을 성공적으로 조회했습니다.", responseDto));
+    }
+
+    @Operation(summary = "마케팅 수신 동의여부 수정", description = "유저의 마케팅 수신 동의 상태를 변경합니다.")
+    @PatchMapping("/me/agreements")
+    public ResponseEntity<ApiResponse<Void>> updateAgreements(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @RequestBody com.sangmyungyaho.barocare.user.dto.AgreementRequestDto request) {
+
+        Long userId = Long.parseLong(userDetails.getUsername());
+        userService.updateAgreements(userId, request);
+
+        return ResponseEntity.ok(ApiResponse.success("마케팅 수신 동의 상태가 변경되었습니다.", null));
+    }
 }
