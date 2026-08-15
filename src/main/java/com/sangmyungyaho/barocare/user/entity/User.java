@@ -107,4 +107,8 @@ public class User extends BaseTimeEntity {
         }
         this.isOnboarded = true;
     }
+
+    public void updateMarketingAgreement(boolean agreed) {
+        this.pushMarketing = agreed;
+    }
 }
