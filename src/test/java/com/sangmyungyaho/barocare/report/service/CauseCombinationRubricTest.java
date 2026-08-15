@@ -71,6 +71,34 @@ class CauseCombinationRubricTest {
 				.containsExactly(ReportCauseFactor.SLEEP, ReportCauseFactor.STRESS, ReportCauseFactor.WATER_INTAKE);
 	}
 
+	@Test
+	void 매칭되는_조합이_없으면_상호작용_설명도_빈_리스트를_반환한다() {
+		List<ReportDto.Interaction> interactions = rubric.interactions(causesOf(ReportCauseFactor.WATER_INTAKE));
+
+		assertThat(interactions).isEmpty();
+	}
+
+	@Test
+	void SLEEP과_STRESS가_있으면_의료적_인과관계_표현_없이_상호작용_설명을_반환한다() {
+		List<ReportDto.Interaction> interactions = rubric.interactions(causesOf(ReportCauseFactor.SLEEP, ReportCauseFactor.STRESS));
+
+		assertThat(interactions).hasSize(1);
+		ReportDto.Interaction interaction = interactions.get(0);
+		assertThat(interaction.factors()).containsExactly(ReportCauseFactor.SLEEP, ReportCauseFactor.STRESS);
+		assertThat(interaction.message()).isEqualTo(
+				"수면 부족과 높은 스트레스가 함께 관찰되었어요. 두 요인이 피부 컨디션 변화와 함께 나타났을 가능성이 있어요.");
+	}
+
+	@Test
+	void 세_요인이_모두_있으면_상호작용_설명도_3요인_설명_하나만_반환하고_2요인_설명과_중복되지_않는다() {
+		List<ReportDto.Interaction> interactions = rubric.interactions(
+				causesOf(ReportCauseFactor.SLEEP, ReportCauseFactor.STRESS, ReportCauseFactor.WATER_INTAKE));
+
+		assertThat(interactions).hasSize(1);
+		assertThat(interactions.get(0).factors())
+				.containsExactly(ReportCauseFactor.SLEEP, ReportCauseFactor.STRESS, ReportCauseFactor.WATER_INTAKE);
+	}
+
 	private List<ReportDto.PrimaryCause> causesOf(ReportCauseFactor... factors) {
 		return List.of(factors).stream()
 				.map(factor -> new ReportDto.PrimaryCause(factor, factor.name(), 1.0, "unit", "설명"))
