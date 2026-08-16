@@ -2,7 +2,10 @@ package com.sangmyungyaho.barocare.user.service;
 
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
+import com.sangmyungyaho.barocare.user.dto.OnboardingAgreementRequestDto;
 import com.sangmyungyaho.barocare.user.dto.OnboardingStatusResponseDto;
+import com.sangmyungyaho.barocare.user.dto.PhotoGuideAgreementRequestDto;
+import com.sangmyungyaho.barocare.user.dto.SkinCarePauseReasonRequestDto;
 import com.sangmyungyaho.barocare.user.entity.User;
 import com.sangmyungyaho.barocare.user.repository.UserRepository;
 import com.sangmyungyaho.barocare.global.security.repository.RefreshTokenRepository;
@@ -26,6 +29,56 @@ public class UserService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new GlobalException(ErrorCode.USER_NOT_FOUND));
 
+        return toOnboardingStatusResponse(user);
+    }
+
+    /**
+     * 온보딩 필수 약관(이용약관 / 개인정보 수집·이용) 동의 저장.
+     * 마케팅 정보 수신 동의(updateAgreements)와는 별개의 필수 항목이며, isOnboarded는 여기서 바꾸지 않는다.
+     */
+    @Transactional
+    public void updateRequiredAgreements(Long userId, OnboardingAgreementRequestDto request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.USER_NOT_FOUND));
+
+        user.updateRequiredAgreements(request.getTermsAgreed(), request.getPrivacyAgreed());
+    }
+
+    @Transactional
+    public void updatePhotoGuideAgreement(Long userId, PhotoGuideAgreementRequestDto request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.USER_NOT_FOUND));
+
+        user.updatePhotoGuideAgreement(request.getPhotoGuideAgreed());
+    }
+
+    @Transactional
+    public void updateSkinCarePauseReason(Long userId, SkinCarePauseReasonRequestDto request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.USER_NOT_FOUND));
+
+        user.updateSkinCarePauseReason(request.getSkinCarePauseReason());
+    }
+
+    /**
+     * 온보딩 완료(POST /api/v1/onboarding/complete). isOnboarded=true는 오직 이 메서드를 통해서만 설정된다
+     * (일반 프로필 수정(updateProfile)은 더 이상 이 값을 바꾸지 않는다).
+     * 필수 약관(이용약관/개인정보 수집·이용) 동의가 완료되지 않았으면 완료 처리하지 않는다.
+     */
+    @Transactional
+    public OnboardingStatusResponseDto completeOnboarding(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.USER_NOT_FOUND));
+
+        if (!user.hasAgreedToRequiredTerms()) {
+            throw new GlobalException(ErrorCode.ONBOARDING_AGREEMENT_REQUIRED);
+        }
+
+        user.completeOnboarding();
+        return toOnboardingStatusResponse(user);
+    }
+
+    private OnboardingStatusResponseDto toOnboardingStatusResponse(User user) {
         OnboardingStatusResponseDto.UserInfoDto userInfo = new OnboardingStatusResponseDto.UserInfoDto(
                 user.getId(),
                 user.getNickname(),
@@ -33,9 +86,9 @@ public class UserService {
                 user.isOnboarded(),
                 user.getCreatedAt()
         );
-
         return new OnboardingStatusResponseDto(userInfo);
     }
+
     @Transactional
     public com.sangmyungyaho.barocare.user.dto.ProfileUpdateResponseDto updateProfile(Long userId, com.sangmyungyaho.barocare.user.dto.ProfileUpdateRequestDto request) {
         User user = userRepository.findById(userId)
