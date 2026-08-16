@@ -64,7 +64,7 @@ public class AuthService {
                 .build();
         refreshTokenRepository.save(redisToken);
 
-        return new LoginResponseDto(accessToken, refreshToken, isNewUser, false);
+        return new LoginResponseDto(accessToken, refreshToken, isNewUser, user.isOnboarded());
     }
 
     @Transactional

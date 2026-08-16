@@ -15,9 +15,6 @@ import java.time.Instant;
 
 /**
  * 피부 분석용 얼굴 이미지 엔티티.
- *
- * TODO: auth/user 도메인이 완성되면 userId(또는 User 연관관계)를 추가해
- *       특정 사용자와 SkinImage를 연결해야 한다.
  */
 @Entity
 @Table(name = "skin_image")
@@ -30,6 +27,9 @@ public class SkinImage {
 	@Column(name = "skin_image_id")
 	private Long id;
 
+	@Column(name = "user_id", nullable = false)
+	private Long userId;
+
 	@Column(name = "image_url", nullable = false, length = 1000)
 	private String imageUrl;
 
@@ -41,7 +41,8 @@ public class SkinImage {
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private Instant createdAt;
 
-	public SkinImage(String imageUrl, String storedFileName) {
+	public SkinImage(Long userId, String imageUrl, String storedFileName) {
+		this.userId = userId;
 		this.imageUrl = imageUrl;
 		this.storedFileName = storedFileName;
 	}
