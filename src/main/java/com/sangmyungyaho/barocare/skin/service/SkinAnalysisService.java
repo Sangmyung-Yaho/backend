@@ -189,6 +189,44 @@ public class SkinAnalysisService {
 		);
 	}
 
+	/**
+	 * 홈 대시보드 통합 조회 전용: 사용자의 가장 최근 SkinAnalysis를 조회한다. getDetail()과 달리
+	 * 조회할 ID를 미리 알 필요가 없고(가장 최근 것을 바로 찾는다), 소유권 검증도 필요 없다(애초에
+	 * userId 기준으로만 조회하므로 다른 사용자의 데이터가 섞일 수 없다). 분석 기록이 없으면
+	 * Optional.empty()를 반환하며, 새로운 분석을 실행하지 않는다(순수 DB 조회).
+	 *
+	 * findTop2ByUserIdOrderByAnalyzedAtDesc() 한 번의 조회로 최신(index 0)과 직전(index 1) 분석을
+	 * 동시에 얻으므로, getDetail()의 findTopByUserIdAndAnalyzedAtLessThan... 조회를 추가로 반복하지 않는다.
+	 */
+	public Optional<SkinAnalysisDto.DetailResponse> getLatestDetailForUser(Long userId) {
+		List<SkinAnalysis> recentAnalyses = skinAnalysisRepository.findTop2ByUserIdOrderByAnalyzedAtDesc(userId);
+		if (recentAnalyses.isEmpty()) {
+			return Optional.empty();
+		}
+
+		SkinAnalysis latest = recentAnalyses.get(0);
+		SkinAnalysis previous = recentAnalyses.size() > 1 ? recentAnalyses.get(1) : null;
+
+		boolean isBaseline = skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(userId)
+				.map(SkinAnalysis::getId)
+				.map(baselineId -> baselineId.equals(latest.getId()))
+				.orElse(false);
+
+		Long previousId = previous != null ? previous.getId() : null;
+		ReportChangeStatus rednessChangeStatus = previous != null
+				? toChangeStatus(latest.getRednessLevel().ordinal() - previous.getRednessLevel().ordinal())
+				: null;
+		ReportChangeStatus troubleChangeStatus = previous != null
+				? toChangeStatus(latest.getTroubleLevel().ordinal() - previous.getTroubleLevel().ordinal())
+				: null;
+
+		return Optional.of(new SkinAnalysisDto.DetailResponse(
+				latest.getId(), latest.getSkinImage().getId(),
+				latest.getRednessLevel(), latest.getTroubleLevel(), latest.getSkinLevel(), latest.getAnalyzedAt(),
+				isBaseline, previousId, rednessChangeStatus, troubleChangeStatus
+		));
+	}
+
 	// ReportService의 toReportChangeStatus()와 동일한 규칙(등급 ordinal이 낮아지면 IMPROVED)이다.
 	// Phase 4(ReportService) 로직은 그대로 두고 건드리지 않기 위해, 이 화면-연동 이슈 범위 안에서
 	// 독립적으로 계산한다(ReportService를 이 도메인이 의존하게 만들지 않는다).
