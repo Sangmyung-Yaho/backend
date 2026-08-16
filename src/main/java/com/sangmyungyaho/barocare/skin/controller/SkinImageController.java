@@ -15,6 +15,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -49,10 +51,12 @@ public class SkinImageController {
 	})
 	@PostMapping(value = "/api/v1/skin-images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 	public ResponseEntity<SkinImageDto.Response> uploadSkinImage(
+			@AuthenticationPrincipal UserDetails userDetails,
 			@Parameter(description = "피부 분석을 위해 촬영한 얼굴 이미지 파일(jpg, jpeg, png)", required = true)
 			@RequestParam("image") MultipartFile image
 	) {
-		SkinImageDto.Response response = skinImageService.uploadSkinImage(image);
+		Long userId = Long.parseLong(userDetails.getUsername());
+		SkinImageDto.Response response = skinImageService.uploadSkinImage(userId, image);
 		return ResponseEntity.status(HttpStatus.CREATED).body(response);
 	}
 }
