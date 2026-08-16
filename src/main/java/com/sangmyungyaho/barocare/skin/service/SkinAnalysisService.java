@@ -5,6 +5,7 @@ import com.sangmyungyaho.barocare.ai.dto.AiDto;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.global.storage.ImageStorageService;
+import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
 import com.sangmyungyaho.barocare.skin.dto.SkinAnalysisDto;
 import com.sangmyungyaho.barocare.skin.entity.ImageQualityRating;
 import com.sangmyungyaho.barocare.skin.entity.SkinAnalysis;
@@ -28,6 +29,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -147,6 +149,57 @@ public class SkinAnalysisService {
 				history,
 				baseline
 		);
+	}
+
+	/**
+	 * 피부 분석 상세 조회(프론트 화면 연동). 소유자 검증을 거치며, baseline(최초 분석) 여부와
+	 * 직전 분석 대비 변화(redness/trouble)를 함께 반환한다. history API(GET .../history)의 기간별
+	 * 목록과 달리 단건 상세이며, 새로 데이터를 계산/저장하지 않고 이미 저장된 값만 조회한다.
+	 */
+	public SkinAnalysisDto.DetailResponse getDetail(Long userId, Long skinAnalysisId) {
+		SkinAnalysis analysis = skinAnalysisRepository.findById(skinAnalysisId)
+				.orElseThrow(() -> new GlobalException(ErrorCode.SKIN_ANALYSIS_NOT_FOUND));
+
+		if (!analysis.getUserId().equals(userId)) {
+			log.warn("피부 분석 상세 조회 거부: 다른 사용자의 분석 - skinAnalysisId={}, ownerUserId={}, requestUserId={}",
+					skinAnalysisId, analysis.getUserId(), userId);
+			throw new GlobalException(ErrorCode.FORBIDDEN);
+		}
+
+		boolean isBaseline = skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(userId)
+				.map(SkinAnalysis::getId)
+				.map(baselineId -> baselineId.equals(analysis.getId()))
+				.orElse(false);
+
+		Optional<SkinAnalysis> previous = skinAnalysisRepository
+				.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(userId, analysis.getAnalyzedAt());
+
+		Long previousId = previous.map(SkinAnalysis::getId).orElse(null);
+		ReportChangeStatus rednessChangeStatus = previous
+				.map(p -> toChangeStatus(analysis.getRednessLevel().ordinal() - p.getRednessLevel().ordinal()))
+				.orElse(null);
+		ReportChangeStatus troubleChangeStatus = previous
+				.map(p -> toChangeStatus(analysis.getTroubleLevel().ordinal() - p.getTroubleLevel().ordinal()))
+				.orElse(null);
+
+		return new SkinAnalysisDto.DetailResponse(
+				analysis.getId(), analysis.getSkinImage().getId(),
+				analysis.getRednessLevel(), analysis.getTroubleLevel(), analysis.getSkinLevel(), analysis.getAnalyzedAt(),
+				isBaseline, previousId, rednessChangeStatus, troubleChangeStatus
+		);
+	}
+
+	// ReportService의 toReportChangeStatus()와 동일한 규칙(등급 ordinal이 낮아지면 IMPROVED)이다.
+	// Phase 4(ReportService) 로직은 그대로 두고 건드리지 않기 위해, 이 화면-연동 이슈 범위 안에서
+	// 독립적으로 계산한다(ReportService를 이 도메인이 의존하게 만들지 않는다).
+	private ReportChangeStatus toChangeStatus(int change) {
+		if (change < 0) {
+			return ReportChangeStatus.IMPROVED;
+		}
+		if (change > 0) {
+			return ReportChangeStatus.WORSENED;
+		}
+		return ReportChangeStatus.UNCHANGED;
 	}
 
 	/**

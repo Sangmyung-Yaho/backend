@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -139,5 +140,48 @@ public class SkinAnalysisController {
 	) {
 		Long userId = Long.parseLong(userDetails.getUsername());
 		return org.springframework.http.ResponseEntity.ok(com.sangmyungyaho.barocare.global.response.ApiResponse.success("피부 분석 히스토리를 조회했습니다.", skinAnalysisService.getHistory(userId, period)));
+	}
+
+	@Operation(
+			summary = "피부 분석 상세 조회",
+			description = "특정 피부 분석 결과를 상세 조회한다. 히스토리 조회(GET .../history)와 달리 단건 조회이며, "
+					+ "baseline(최초 분석) 여부와 직전 분석 대비 붉은기/트러블 변화(IMPROVED/WORSENED/UNCHANGED)를 함께 반환한다. "
+					+ "새로운 분석/저장이나 OpenAI 재호출은 발생하지 않는다."
+	)
+	@ApiResponses({
+			@ApiResponse(
+					responseCode = "200", description = "조회 성공",
+					content = @Content(schema = @Schema(implementation = SkinAnalysisDto.DetailResponse.class))
+			),
+			@ApiResponse(
+					responseCode = "403", description = "다른 사용자의 피부 분석입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "FORBIDDEN",
+									value = "{\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"해당 리소스에 접근할 권한이 없습니다.\"}}"
+							)
+					)
+			),
+			@ApiResponse(
+					responseCode = "404", description = "존재하지 않는 피부 분석입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "SKIN_ANALYSIS_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
+							)
+					)
+			)
+	})
+	@GetMapping("/api/v1/skin-analyses/{skinAnalysisId}")
+	public org.springframework.http.ResponseEntity<com.sangmyungyaho.barocare.global.response.ApiResponse<SkinAnalysisDto.DetailResponse>> getDetail(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
+			@Parameter(description = "조회할 피부 분석 ID", example = "12")
+			@PathVariable Long skinAnalysisId
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		SkinAnalysisDto.DetailResponse response = skinAnalysisService.getDetail(userId, skinAnalysisId);
+		return org.springframework.http.ResponseEntity.ok(com.sangmyungyaho.barocare.global.response.ApiResponse.success("피부 분석 상세 정보를 조회했습니다.", response));
 	}
 }
