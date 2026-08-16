@@ -62,6 +62,12 @@ public class SkinAnalysisService {
 		SkinImage skinImage = skinImageRepository.findById(request.skinImageId())
 				.orElseThrow(() -> new GlobalException(ErrorCode.SKIN_IMAGE_NOT_FOUND));
 
+		if (!skinImage.getUserId().equals(userId)) {
+			log.warn("피부 분석 요청 거부: 다른 사용자의 이미지 - skinImageId={}, ownerUserId={}, requestUserId={}",
+					request.skinImageId(), skinImage.getUserId(), userId);
+			throw new GlobalException(ErrorCode.FORBIDDEN);
+		}
+
 		byte[] imageBytes = imageStorageService.load(STORAGE_DIRECTORY, skinImage.getStoredFileName())
 				.orElseThrow(() -> new GlobalException(ErrorCode.SKIN_IMAGE_FILE_NOT_FOUND));
 		log.info("이미지 파일 로드 완료: skinImageId={}, storedFileName={}, bytes={}",

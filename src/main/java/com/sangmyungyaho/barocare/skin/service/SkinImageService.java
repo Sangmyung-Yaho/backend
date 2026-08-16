@@ -27,12 +27,11 @@ public class SkinImageService {
 	private final SkinImageRepository skinImageRepository;
 	private final ImageStorageService imageStorageService;
 
-	public SkinImageDto.Response uploadSkinImage(MultipartFile image) {
+	public SkinImageDto.Response uploadSkinImage(Long userId, MultipartFile image) {
 		validateImage(image);
 
-		// TODO: User 연동 후에는 업로드한 사용자(userId)와 SkinImage를 연결해야 한다.
 		StoredImage storedImage = imageStorageService.store(image, STORAGE_DIRECTORY);
-		SkinImage skinImage = new SkinImage(storedImage.url(), storedImage.storedFileName());
+		SkinImage skinImage = new SkinImage(userId, storedImage.url(), storedImage.storedFileName());
 
 		return SkinImageDto.Response.from(skinImageRepository.save(skinImage));
 	}
