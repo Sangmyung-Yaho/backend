@@ -59,10 +59,12 @@ public class ReportController {
 	})
 	@GetMapping("/api/v1/reports")
 	public ResponseEntity<ApiResponse<ReportDto.ListResponse>> getReports(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
 			@Parameter(description = "조회할 리포트 기준일(YYYY-MM-DD). 생략하면 전체 리포트를 최신순으로 조회한다.", example = "2026-08-07")
 			@RequestParam(required = false) LocalDate date
 	) {
-		ReportDto.ListResponse response = reportService.getReports(date);
+		Long userId = Long.parseLong(userDetails.getUsername());
+		ReportDto.ListResponse response = reportService.getReports(userId, date);
 		return ResponseEntity.ok(ApiResponse.success("리포트 목록을 조회했습니다.", response));
 	}
 
@@ -145,8 +147,11 @@ public class ReportController {
 			)
 	})
 	@GetMapping("/api/v1/reports/skin/latest")
-	public ResponseEntity<ReportDto.Response> getLatestSkinReport() {
-		return ResponseEntity.ok(reportService.getLatestSkinReport());
+	public ResponseEntity<ReportDto.Response> getLatestSkinReport(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		return ResponseEntity.ok(reportService.getLatestSkinReport(userId));
 	}
 
 	@Operation(
@@ -198,8 +203,11 @@ public class ReportController {
 			)
 	})
 	@GetMapping("/api/v1/reports/causes/latest")
-	public ResponseEntity<ReportDto.Response> getLatestCauseReport() {
-		return ResponseEntity.ok(reportService.getLatestSkinReport());
+	public ResponseEntity<ReportDto.Response> getLatestCauseReport(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		return ResponseEntity.ok(reportService.getLatestSkinReport(userId));
 	}
 
 	@Operation(
@@ -273,8 +281,11 @@ public class ReportController {
 			)
 	})
 	@GetMapping("/api/v1/reports/causes/latest/interactions")
-	public ResponseEntity<ApiResponse<ReportDto.InteractionsResponse>> getLatestCauseInteractions() {
-		ReportDto.InteractionsResponse response = reportService.getLatestCauseInteractions();
+	public ResponseEntity<ApiResponse<ReportDto.InteractionsResponse>> getLatestCauseInteractions(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		ReportDto.InteractionsResponse response = reportService.getLatestCauseInteractions(userId);
 		return ResponseEntity.ok(ApiResponse.success("원인 요인 상호작용 설명을 조회했습니다.", response));
 	}
 
@@ -337,8 +348,11 @@ public class ReportController {
 			)
 	})
 	@GetMapping("/api/v1/reports/causes/latest/skin-signal")
-	public ResponseEntity<ApiResponse<ReportDto.SkinSignalResponse>> getLatestSkinSignal() {
-		ReportDto.SkinSignalResponse response = reportService.getLatestSkinSignal();
+	public ResponseEntity<ApiResponse<ReportDto.SkinSignalResponse>> getLatestSkinSignal(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		ReportDto.SkinSignalResponse response = reportService.getLatestSkinSignal(userId);
 		return ResponseEntity.ok(ApiResponse.success("피부 컨디션 신호 카드를 조회했습니다.", response));
 	}
 
@@ -409,8 +423,11 @@ public class ReportController {
 			)
 	})
 	@GetMapping("/api/v1/reports/causes/latest/warnings")
-	public ResponseEntity<ApiResponse<ReportDto.WarningsResponse>> getLatestCauseWarnings() {
-		ReportDto.WarningsResponse response = reportService.getLatestCauseWarnings();
+	public ResponseEntity<ApiResponse<ReportDto.WarningsResponse>> getLatestCauseWarnings(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		ReportDto.WarningsResponse response = reportService.getLatestCauseWarnings(userId);
 		return ResponseEntity.ok(ApiResponse.success("고위험 조합 경고를 조회했습니다.", response));
 	}
 }
