@@ -103,6 +103,16 @@ public class ReportService {
 	}
 
 	/**
+	 * 홈 대시보드 통합 조회 전용: getLatestSkinReport()/tryGetLatestSkinReport()와 달리 find-or-create를
+	 * 절대 수행하지 않는다 - 이미 저장된 Report가 없으면 새로 계산(OpenAI 호출)하지 않고 그대로
+	 * Optional.empty()를 반환한다. 홈 조회는 순수 DB 읽기여야 하므로 이 메서드만 사용해야 한다.
+	 */
+	public Optional<ReportDto.Response> getLatestSavedReport(Long userId) {
+		return reportRepository.findTopByCurrentSkinAnalysis_UserIdOrderByReportDateDescIdDesc(userId)
+				.map(report -> ReportDto.Response.of(report, parsePrimaryCauses(report.getPrimaryCausesJson())));
+	}
+
+	/**
 	 * 리포트 보관함 목록(ISSUE-29, GET /api/v1/reports).
 	 *
 	 * 이미 DB에 생성되어 있는 Report만 조회한다 - find-or-create를 수행하는 getLatestSkinReport()와
