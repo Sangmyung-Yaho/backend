@@ -21,6 +21,11 @@ public class UserController {
     private final UserService userService;
 
     @Operation(summary = "프로필 정보 수정", description = "유저의 프로필 정보(닉네임, 키, 몸무게, 피부타입)를 수정하고 권장 목표 수분 섭취량을 반환합니다.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 실패 (UNAUTHORIZED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "사용자 없음 (USER_NOT_FOUND)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))
+    })
     @PatchMapping("/profile")
     public ResponseEntity<ApiResponse<ProfileUpdateResponseDto>> updateProfile(
             @AuthenticationPrincipal UserDetails userDetails,
@@ -33,6 +38,11 @@ public class UserController {
     }
 
     @Operation(summary = "프로필 정보 조회", description = "유저의 프로필 정보(닉네임, 키, 몸무게, 피부타입 등)를 조회합니다.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 실패 (UNAUTHORIZED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "사용자 없음 (USER_NOT_FOUND)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))
+    })
     @GetMapping("/profile")
     public ResponseEntity<ApiResponse<com.sangmyungyaho.barocare.user.dto.ProfileReadResponseDto>> getProfile(
             @AuthenticationPrincipal UserDetails userDetails) {
@@ -44,6 +54,11 @@ public class UserController {
     }
 
     @Operation(summary = "마케팅 수신 동의여부 조회", description = "유저의 마케팅 수신 동의 상태를 조회합니다.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 실패 (UNAUTHORIZED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "사용자 없음 (USER_NOT_FOUND)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))
+    })
     @GetMapping("/me/agreements")
     public ResponseEntity<ApiResponse<com.sangmyungyaho.barocare.user.dto.AgreementResponseDto>> getAgreements(
             @AuthenticationPrincipal UserDetails userDetails) {
@@ -55,6 +70,11 @@ public class UserController {
     }
 
     @Operation(summary = "마케팅 수신 동의여부 수정", description = "유저의 마케팅 수신 동의 상태를 변경합니다.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 실패 (UNAUTHORIZED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "사용자 없음 (USER_NOT_FOUND)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))
+    })
     @PatchMapping("/me/agreements")
     public ResponseEntity<ApiResponse<Void>> updateAgreements(
             @AuthenticationPrincipal UserDetails userDetails,
@@ -67,6 +87,11 @@ public class UserController {
     }
 
     @Operation(summary = "회원 탈퇴", description = "유저 계정과 연관된 전체 데이터를 영구 삭제하고 탈퇴 사유를 기록합니다.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "탈퇴 성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 실패 (UNAUTHORIZED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "사용자 없음 (USER_NOT_FOUND)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))
+    })
     @DeleteMapping("/me")
     public ResponseEntity<ApiResponse<Void>> withdraw(
             @AuthenticationPrincipal UserDetails userDetails,

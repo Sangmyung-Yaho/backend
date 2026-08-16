@@ -16,7 +16,10 @@ public enum ErrorCode {
 	INSUFFICIENT_ANALYSIS_DATA(HttpStatus.UNPROCESSABLE_CONTENT, "피부 변화를 비교하기 위한 기록이 충분하지 않습니다."),
 	REPORT_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 리포트입니다."),
 	ROUTINE_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 루틴입니다."),
-	FORBIDDEN(HttpStatus.FORBIDDEN, "해당 리소스에 접근할 권한이 없습니다.");
+	FORBIDDEN(HttpStatus.FORBIDDEN, "해당 리소스에 접근할 권한이 없습니다."),
+	UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다. (토큰 만료/유효하지 않음)"),
+	OAUTH_PROVIDER_NOT_SUPPORTED(HttpStatus.BAD_REQUEST, "지원하지 않는 소셜 플랫폼입니다."),
+	OAUTH_API_FAILED(HttpStatus.BAD_GATEWAY, "소셜 로그인 API 호출에 실패했습니다.");
 
 	private final HttpStatus status;
 	private final String message;

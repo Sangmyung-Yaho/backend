@@ -9,15 +9,20 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 
+import lombok.RequiredArgsConstructor;
+
 @Component
 public class CustomAccessDeniedHandler implements AccessDeniedHandler {
+
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response, AccessDeniedException accessDeniedException) throws IOException, ServletException {
         response.setContentType("application/json;charset=UTF-8");
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         
-        String jsonResponse = String.format("{\"error\": \"Forbidden\", \"message\": \"%s\"}", "해당 리소스에 접근할 권한이 없습니다.");
+        com.sangmyungyaho.barocare.global.exception.ErrorResponse errorResponse = com.sangmyungyaho.barocare.global.exception.ErrorResponse.of(com.sangmyungyaho.barocare.global.exception.ErrorCode.FORBIDDEN);
+        String jsonResponse = objectMapper.writeValueAsString(errorResponse);
         response.getWriter().write(jsonResponse);
     }
 }
