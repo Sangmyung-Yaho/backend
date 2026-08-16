@@ -48,6 +48,16 @@ public class SkinAnalysisController {
 					)
 			),
 			@ApiResponse(
+					responseCode = "403", description = "다른 사용자가 업로드한 이미지입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "FORBIDDEN",
+									value = "{\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"해당 리소스에 접근할 권한이 없습니다.\"}}"
+							)
+					)
+			),
+			@ApiResponse(
 					responseCode = "404", description = "존재하지 않는 피부 이미지입니다.",
 					content = @Content(
 							schema = @Schema(implementation = ErrorResponse.class),
