@@ -116,4 +116,33 @@ public class RoutineService {
 
         routineRepository.saveAll(generatedRoutines);
     }
+
+    @Transactional
+    public RoutineDto.CheckResponse checkRoutine(Long userId, Long routineId, RoutineDto.CheckRequest request) {
+        Routine routine = routineRepository.findById(routineId)
+                .orElseThrow(() -> new GlobalException(ErrorCode.ROUTINE_NOT_FOUND));
+
+        if (!routine.getUserId().equals(userId)) {
+            throw new GlobalException(ErrorCode.FORBIDDEN);
+        }
+
+        if (request.isCompleted()) {
+            routine.complete();
+        } else {
+            routine.incomplete();
+        }
+
+        LocalDate routineDate = routine.getRoutineDate();
+        long totalCount = routineRepository.countByUserIdAndRoutineDate(userId, routineDate);
+        long completedCount = routineRepository.countByUserIdAndRoutineDateAndIsCompletedTrue(userId, routineDate);
+        int todayProgressPercent = totalCount == 0 ? 0 : (int) ((completedCount * 100) / totalCount);
+
+        return new RoutineDto.CheckResponse(
+                routine.getId(),
+                routine.isCompleted(),
+                completedCount,
+                totalCount,
+                todayProgressPercent
+        );
+    }
 }
