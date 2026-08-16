@@ -43,8 +43,10 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -500,6 +502,46 @@ class ReportServiceTest {
 		Optional<ReportDto.Response> result = reportService.tryGetLatestSkinReport(USER_ID);
 
 		assertThat(result).isEmpty();
+	}
+
+	@Test
+	void getLatestSavedReport은_저장된_리포트가_있으면_반환하고_AiClient를_전혀_호출하지_않는다() {
+		// feat: 홈 대시보드 통합 조회 - find-or-create가 아니라 순수 조회만 해야 한다.
+		Report report = mock(Report.class);
+		when(report.getId()).thenReturn(55L);
+		when(report.getReportDate()).thenReturn(LocalDate.of(2026, 8, 12));
+		when(report.getRednessPreviousScore()).thenReturn(1);
+		when(report.getRednessCurrentScore()).thenReturn(0);
+		when(report.getRednessStatus()).thenReturn(ReportChangeStatus.IMPROVED);
+		when(report.getTroublePreviousScore()).thenReturn(0);
+		when(report.getTroubleCurrentScore()).thenReturn(0);
+		when(report.getTroubleStatus()).thenReturn(ReportChangeStatus.UNCHANGED);
+		when(report.getPrimaryCausesJson()).thenReturn("[]");
+		when(report.getSummary()).thenReturn("요약4");
+		when(reportRepository.findTopByCurrentSkinAnalysis_UserIdOrderByReportDateDescIdDesc(USER_ID))
+				.thenReturn(Optional.of(report));
+		when(objectMapper.readValue(eq("[]"), org.mockito.ArgumentMatchers.<tools.jackson.core.type.TypeReference<List<ReportDto.PrimaryCause>>>any()))
+				.thenReturn(List.of());
+
+		Optional<ReportDto.Response> result = reportService.getLatestSavedReport(USER_ID);
+
+		assertThat(result).isPresent();
+		assertThat(result.get().reportId()).isEqualTo(55L);
+		assertThat(result.get().summary()).isEqualTo("요약4");
+		verifyNoInteractions(aiClient);
+	}
+
+	@Test
+	void getLatestSavedReport은_저장된_리포트가_없으면_빈_Optional을_반환하고_새로_생성하지_않는다() {
+		when(reportRepository.findTopByCurrentSkinAnalysis_UserIdOrderByReportDateDescIdDesc(USER_ID))
+				.thenReturn(Optional.empty());
+
+		Optional<ReportDto.Response> result = reportService.getLatestSavedReport(USER_ID);
+
+		assertThat(result).isEmpty();
+		verifyNoInteractions(aiClient);
+		verify(skinAnalysisRepository, never()).findTop2ByUserIdOrderByAnalyzedAtDesc(any());
+		verify(checkinRepository, never()).findAllByUserIdAndCheckedDateLessThanEqualOrderByCheckedDateDesc(any(), any());
 	}
 
 	private Report reportSummaryOf(Long id, LocalDate reportDate, SkinAnalysisLevel skinLevel, String summary) {
