@@ -69,9 +69,13 @@ public class SkinAnalysisController {
 			)
 	})
 	@PostMapping("/api/v1/skin-analyses")
-	public ResponseEntity<SkinAnalysisDto.Response> analyzeSkin(@Valid @RequestBody SkinAnalysisDto.Request request) {
-		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(request);
-		return ResponseEntity.status(HttpStatus.CREATED).body(response);
+	public org.springframework.http.ResponseEntity<com.sangmyungyaho.barocare.global.response.ApiResponse<SkinAnalysisDto.Response>> analyzeSkin(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
+			@Valid @RequestBody SkinAnalysisDto.Request request
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(userId, request);
+		return org.springframework.http.ResponseEntity.status(org.springframework.http.HttpStatus.CREATED).body(com.sangmyungyaho.barocare.global.response.ApiResponse.success("피부 분석이 완료되었습니다.", response));
 	}
 
 	@Operation(
@@ -107,10 +111,12 @@ public class SkinAnalysisController {
 			)
 	})
 	@GetMapping("/api/v1/skin-analyses/history")
-	public ResponseEntity<SkinAnalysisDto.HistoryResponse> getHistory(
+	public org.springframework.http.ResponseEntity<com.sangmyungyaho.barocare.global.response.ApiResponse<SkinAnalysisDto.HistoryResponse>> getHistory(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
 			@Parameter(description = "조회 기간(일)", example = "28")
 			@RequestParam(name = "period", required = false, defaultValue = "28") int period
 	) {
-		return ResponseEntity.ok(skinAnalysisService.getHistory(period));
+		Long userId = Long.parseLong(userDetails.getUsername());
+		return org.springframework.http.ResponseEntity.ok(com.sangmyungyaho.barocare.global.response.ApiResponse.success("피부 분석 히스토리를 조회했습니다.", skinAnalysisService.getHistory(userId, period)));
 	}
 }

@@ -5,22 +5,26 @@ import com.sangmyungyaho.barocare.checkin.entity.Checkin;
 import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
+import com.sangmyungyaho.barocare.routine.service.RoutineService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
+@Transactional
 public class CheckinService {
 
 	private final CheckinRepository checkinRepository;
+	private final RoutineService routineService;
 
-	public CheckinDto.Response createCheckin(CheckinDto.Request request) {
-		// TODO: User 연동 후에는 (userId, checkedDate) 기준으로 중복 검증해야 한다.
-		if (checkinRepository.existsByCheckedDate(request.checkedDate())) {
+	public CheckinDto.Response createCheckin(Long userId, CheckinDto.Request request) {
+		if (checkinRepository.existsByUserIdAndCheckedDate(userId, request.checkedDate())) {
 			throw new GlobalException(ErrorCode.CHECKIN_ALREADY_EXISTS);
 		}
 
-		Checkin checkin = checkinRepository.save(request.toEntity());
+		Checkin checkin = checkinRepository.save(request.toEntity(userId));
+		routineService.generateRoutines(userId, checkin);
 		return CheckinDto.Response.from(checkin);
 	}
 }
