@@ -34,4 +34,18 @@ public class RoutineDto {
 			@JsonProperty("routines") List<RoutineItem> routines
 	) {
 	}
+
+	public record CheckRequest(
+			@JsonProperty("is_completed") boolean isCompleted
+	) {
+	}
+
+	public record CheckResponse(
+			@JsonProperty("routine_id") Long routineId,
+			@JsonProperty("is_completed") boolean isCompleted,
+			@JsonProperty("completed_count") long completedCount,
+			@JsonProperty("total_count") long totalCount,
+			@JsonProperty("today_progress_percent") int todayProgressPercent
+	) {
+	}
 }

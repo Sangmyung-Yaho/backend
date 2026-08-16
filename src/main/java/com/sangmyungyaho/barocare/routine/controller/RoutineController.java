@@ -27,4 +27,16 @@ public class RoutineController {
 		RoutineDto.RoutineResponseDto response = routineService.getTodayRoutines(userId);
 		return org.springframework.http.ResponseEntity.ok(com.sangmyungyaho.barocare.global.response.ApiResponse.success("오늘의 루틴 목록을 조회했습니다.", response));
 	}
+
+	@Operation(summary = "루틴 상태 변경 (완료/미완료)", description = "특정 루틴 항목의 달성 상태를 명시적으로 변경하고, 갱신된 전체 진행률을 반환합니다.")
+	@org.springframework.web.bind.annotation.PatchMapping("/api/v1/routines/{routineId}/check")
+	public org.springframework.http.ResponseEntity<com.sangmyungyaho.barocare.global.response.ApiResponse<RoutineDto.CheckResponse>> checkRoutine(
+			@AuthenticationPrincipal UserDetails userDetails,
+			@org.springframework.web.bind.annotation.PathVariable Long routineId,
+			@org.springframework.web.bind.annotation.RequestBody RoutineDto.CheckRequest request
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		RoutineDto.CheckResponse response = routineService.checkRoutine(userId, routineId, request);
+		return org.springframework.http.ResponseEntity.ok(com.sangmyungyaho.barocare.global.response.ApiResponse.success("루틴 상태가 변경되었습니다.", response));
+	}
 }
