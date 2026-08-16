@@ -7,14 +7,19 @@ import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.report.dto.ReportDto;
+import com.sangmyungyaho.barocare.report.entity.LifestyleFactorLevel;
 import com.sangmyungyaho.barocare.report.entity.Report;
+import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
 import com.sangmyungyaho.barocare.report.repository.ReportRepository;
 import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
 import com.sangmyungyaho.barocare.skin.entity.SkinAnalysis;
+import com.sangmyungyaho.barocare.skin.entity.SkinAnalysisLevel;
 import com.sangmyungyaho.barocare.skin.entity.SkinComparison;
 import com.sangmyungyaho.barocare.skin.repository.SkinAnalysisRepository;
 import com.sangmyungyaho.barocare.skin.repository.SkinComparisonRepository;
+import com.sangmyungyaho.barocare.user.entity.User;
+import com.sangmyungyaho.barocare.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +30,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -39,8 +45,15 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * redness/trouble의 score(SkinAnalysisLevel ordinal)와 status(IMPROVED/WORSENED/UNCHANGED)는
  * 둘 다 이 서비스가 change 값 하나로 계산한다 - AI(SkinComparisonService의 이미지 비교 판단)에 기대지
- * 않으므로 score와 status가 서로 다른 기준으로 어긋날 수 없다. AI(AiClient)는 원인 후보 해석과
- * 자연어 설명/요약 생성에만 사용한다.
+ * 않으므로 score와 status가 서로 다른 기준으로 어긋날 수 없다. status가 공식 판정이고, direction
+ * (INCREASED/STABLE/DECREASED, baseline 참고 정보 포함)은 GPT에게 주는 보조 컨텍스트다 - 이미 있는
+ * SkinComparison을 재사용하거나 status로부터 결정적으로 유도하며, 새로 AI를 호출하지 않는다.
+ *
+ * 생활습관 요인(수면/스트레스/수분)도 마찬가지로 LifestyleFactorRubric이 먼저 GOOD/MODERATE/POOR로
+ * 판정하고, POOR인 요인만 "주요 위험 요인 후보"로 확정해 GPT에 전달한다. GPT(AiClient)는 이 후보에
+ * 대한 원인 설명/자연어 요약 생성만 담당하며, 후보 밖 요인을 causes에 넣어 반환하더라도 이 서비스가
+ * candidateFactors 기준으로 다시 걸러내 최종 응답에는 절대 남지 않는다(GPT가 백엔드 판정을 뒤집거나
+ * 임의로 원인을 추가하지 못하도록 하는 코드 레벨 강제).
  *
  * ISSUE-28(복합 원인 분석 및 피부 변화 설명): getLatestSkinReport()가 내부적으로 의존하는
  * find-or-create 로직(getOrCreateLatestReport)을 공유해, 여러 API가 같은 최신 Report를 새로
@@ -61,6 +74,8 @@ public class ReportService {
 	private final ObjectMapper objectMapper;
 	private final CauseCombinationRubric causeCombinationRubric;
 	private final SkinComparisonRepository skinComparisonRepository;
+	private final UserRepository userRepository;
+	private final LifestyleFactorRubric lifestyleFactorRubric;
 
 	// currentSkinAnalysisId 기준 동시 생성 방지용 락(단일 인스턴스 기준). DB unique 제약이 최종 안전장치이므로
 	// 여기서는 "같은 순간에 들어온 요청이 OpenAI를 중복 호출하지 않도록" 최소화하는 목적만 가진다.
@@ -69,6 +84,22 @@ public class ReportService {
 	public ReportDto.Response getLatestSkinReport(Long userId) {
 		Report report = getOrCreateLatestReport(userId);
 		return ReportDto.Response.of(report, parsePrimaryCauses(report.getPrimaryCausesJson()));
+	}
+
+	/**
+	 * 개인화 피부 원인 분석(케어/루틴 연동용): getLatestSkinReport()와 동일하지만, 리포트를 아직 만들 수
+	 * 없는 상황(피부 분석 부족/체크인 없음/AI 분석 실패 등)을 예외로 전파하지 않고 빈 값으로 돌려준다.
+	 * RoutineService처럼 "있으면 참고하고, 없으면 폴백"해야 하는 호출부가 항상 안전하게 쓸 수 있도록 한다 -
+	 * 이 메서드 자체는 새로운 데이터 부족 fallback을 만들지 않고, 이미 존재하는 getLatestSkinReport()의
+	 * 예외를 흡수만 한다.
+	 */
+	public Optional<ReportDto.Response> tryGetLatestSkinReport(Long userId) {
+		try {
+			return Optional.of(getLatestSkinReport(userId));
+		} catch (GlobalException e) {
+			log.info("원인 리포트를 아직 계산할 수 없어 폴백 처리: userId={}, errorCode={}", userId, e.getErrorCode());
+			return Optional.empty();
+		}
 	}
 
 	/**
@@ -224,16 +255,52 @@ public class ReportService {
 					rednessPreviousScore, rednessCurrentScore, rednessChange, rednessStatus,
 					troublePreviousScore, troubleCurrentScore, troubleChange, troubleStatus);
 
-			AiDto.SkinChangeInput skinChangeInput = new AiDto.SkinChangeInput(
-					rednessChange, rednessStatus, troubleChange, troubleStatus
-			);
-			AiDto.CheckinInput checkinInput = buildCheckinInput(latestCheckin, previousCheckins);
+			// 피부 변화 비교(#1): 직전 분석 대비 증가/유지/감소. 이미 계산된 SkinComparison(AI 이미지 비교,
+			// POST /api/v1/skin-comparisons로 별도 생성됨)이 있으면 재사용하고, 없으면 위에서 계산한
+			// status로부터 결정적으로 유도한다(GPT 재호출 없음) - getLatestSkinSignal()과 동일한 fallback 규칙.
+			Optional<SkinComparison> comparison = skinComparisonRepository
+					.findByCurrentSkinAnalysis_IdAndPreviousSkinAnalysis_Id(current.getId(), previous.getId());
+			ChangeDirection rednessDirection = comparison.map(SkinComparison::getRednessChange)
+					.orElseGet(() -> toChangeDirection(rednessStatus));
+			ChangeDirection troubleDirection = comparison.map(SkinComparison::getTroubleChange)
+					.orElseGet(() -> toChangeDirection(troubleStatus));
 
-			log.info("OpenAI 원인 분석 요청 시작: currentSkinAnalysisId={}", current.getId());
+			// baseline(최초 분석) 참조: 두 번째 분석이면 previous가 곧 baseline이고, 그 이후 분석이면
+			// baseline은 previous보다 더 이전 시점이다. 어느 쪽이든 baseline 등급을 참고 정보로 함께 전달한다.
+			Optional<SkinAnalysis> baseline = skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(userId);
+			boolean comparedAgainstBaseline = baseline.map(SkinAnalysis::getId)
+					.map(id -> id.equals(previous.getId())).orElse(false);
+			SkinAnalysisLevel baselineRednessLevel = baseline.map(SkinAnalysis::getRednessLevel).orElse(null);
+			SkinAnalysisLevel baselineTroubleLevel = baseline.map(SkinAnalysis::getTroubleLevel).orElse(null);
+
+			AiDto.SkinChangeInput skinChangeInput = new AiDto.SkinChangeInput(
+					rednessChange, rednessStatus, rednessDirection,
+					troubleChange, troubleStatus, troubleDirection,
+					comparedAgainstBaseline, baselineRednessLevel, baselineTroubleLevel
+			);
+
+			// 목표 음수량 반영: 온보딩/프로필에서 계산·저장된 User.waterGoalMl을 조회해 수분 판정에 사용한다.
+			Integer waterGoalMl = userRepository.findById(userId).map(User::getWaterGoalMl).orElse(null);
+			// 생활습관 요인판정: GPT에 raw 수치만 넘기지 않고, 먼저 백엔드가 GOOD/MODERATE/POOR로 판정한다.
+			LifestyleFactorRubric.Judgment judgment = lifestyleFactorRubric.judge(latestCheckin, previousCheckins, waterGoalMl);
+			// 주요 위험 요인 후보(#3): POOR로 판정된 요인만 백엔드가 후보로 확정한다. GPT는 causes를
+			// 이 후보에 대해서만 작성해야 하고, 아래에서 이 목록 기준으로 한 번 더 걸러 코드 레벨로 강제한다.
+			List<ReportCauseFactor> candidateFactors = resolveCandidateFactors(judgment);
+			AiDto.CheckinInput checkinInput = buildCheckinInput(latestCheckin, previousCheckins, judgment, candidateFactors);
+
+			log.info("OpenAI 원인 분석 요청 시작: currentSkinAnalysisId={}, candidateFactors={}", current.getId(), candidateFactors);
 			AiDto.CauseAnalysisResult causeAnalysisResult = aiClient.analyzeSkinChangeCauses(skinChangeInput, checkinInput);
 			validateCauseAnalysisResult(causeAnalysisResult);
 
 			List<ReportDto.PrimaryCause> primaryCauses = causeAnalysisResult.causes().stream()
+					.filter(cause -> {
+						boolean isCandidate = candidateFactors.contains(cause.factor());
+						if (!isCandidate) {
+							log.warn("AI가 후보 목록 밖의 요인을 반환해 제외함: factor={}, candidateFactors={}",
+									cause.factor(), candidateFactors);
+						}
+						return isCandidate;
+					})
 					.map(cause -> enrichCause(cause, latestCheckin))
 					.toList();
 
@@ -257,7 +324,10 @@ public class ReportService {
 		}
 	}
 
-	private AiDto.CheckinInput buildCheckinInput(Checkin latestCheckin, List<Checkin> previousCheckins) {
+	private AiDto.CheckinInput buildCheckinInput(
+			Checkin latestCheckin, List<Checkin> previousCheckins,
+			LifestyleFactorRubric.Judgment judgment, List<ReportCauseFactor> candidateFactors
+	) {
 		Double averageSleepHours = previousCheckins.isEmpty() ? null
 				: previousCheckins.stream().mapToDouble(Checkin::getSleepHours).average().orElseThrow();
 		Double averageStressLevel = previousCheckins.isEmpty() ? null
@@ -267,8 +337,27 @@ public class ReportService {
 
 		return new AiDto.CheckinInput(
 				latestCheckin.getSleepHours(), latestCheckin.getStressLevel(), latestCheckin.getWaterIntakeMl(),
-				averageSleepHours, averageStressLevel, averageWaterIntakeMl
+				averageSleepHours, averageStressLevel, averageWaterIntakeMl,
+				judgment.sleepLevel(), judgment.stressLevel(), judgment.waterLevel(), judgment.personalBaselineUsed(),
+				candidateFactors
 		);
+	}
+
+	// 주요 위험 요인 후보(#3): 생활습관 요인 중 POOR로 판정된 것만 "원인 후보"로 확정한다.
+	// GOOD/MODERATE는 문제로 보지 않으므로 후보에 넣지 않는다 - GPT가 정상 요인을 임의로 원인으로
+	// 선정하지 못하도록 하는 첫 번째 방어선이며, 두 번째 방어선은 createReport()의 causes 필터링이다.
+	private List<ReportCauseFactor> resolveCandidateFactors(LifestyleFactorRubric.Judgment judgment) {
+		List<ReportCauseFactor> candidates = new ArrayList<>();
+		if (judgment.sleepLevel() == LifestyleFactorLevel.POOR) {
+			candidates.add(ReportCauseFactor.SLEEP);
+		}
+		if (judgment.stressLevel() == LifestyleFactorLevel.POOR) {
+			candidates.add(ReportCauseFactor.STRESS);
+		}
+		if (judgment.waterLevel() == LifestyleFactorLevel.POOR) {
+			candidates.add(ReportCauseFactor.WATER_INTAKE);
+		}
+		return candidates;
 	}
 
 	// score(SkinAnalysisLevel ordinal) 변화량만으로 status를 결정한다. ordinal이 낮을수록(SAFE에 가까울수록)

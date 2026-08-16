@@ -112,30 +112,38 @@ public class AiClient {
 	/**
 	 * 피부 변화 원인 분석(REP-101) 프롬프트 버전. 이 프롬프트를 수정하면 함께 올린다.
 	 */
-	public static final String CAUSE_ANALYSIS_SCHEMA_VERSION = "v1-cause-analysis";
+	public static final String CAUSE_ANALYSIS_SCHEMA_VERSION = "v3-cause-analysis";
 
 	/**
-	 * 피부 변화 원인 후보 "해석" 프롬프트.
-	 * 중요: redness/trouble의 점수·변화량·상태는 이미 Java(SkinAnalysisLevel 서수값, SkinComparison 변화 방향)가
-	 * 확정적으로 계산해 전달한다. GPT는 이 숫자를 다시 계산하거나 새로운 점수를 만들어내지 않는다 -
-	 * 오직 이미 계산된 결과와 체크인 데이터 사이의 인과관계를 해석하고 자연어로 설명하는 역할만 한다.
+	 * 피부 변화 원인 후보 "설명 생성" 프롬프트.
+	 * 중요(역할 분리): 어떤 요인이 원인 "후보"인지는 이미 백엔드(LifestyleFactorRubric)가 candidateFactors로
+	 * 확정해서 넘긴다. GPT는 그 후보를 뒤집거나 새 후보를 추가하는 판정자가 아니라, 이미 확정된 후보에 대해
+	 * 사용자에게 보여줄 자연어 설명을 쓰는 역할만 한다. redness/trouble의 점수·변화량·상태·변화방향도
+	 * 전부 Java가 계산해 전달하며, GPT는 이 값을 다시 계산하지 않는다.
 	 */
 	private static final String CAUSE_ANALYSIS_SYSTEM_PROMPT = """
-			너는 사용자의 피부 변화 분석 결과와 생활습관 체크인 데이터를 보고, 피부 변화의 주요 원인 후보를
-			해석해서 설명하는 도구다.
+			너는 사용자의 피부 변화 분석 결과와 생활습관 체크인 데이터를 보고, 이미 확정된 원인 후보에 대해
+			자연어 설명을 작성하는 도구다. 어떤 요인이 원인인지 "판정"하는 것은 네 역할이 아니다 - 그 판정은
+			이미 백엔드가 끝냈고, 너는 그 결과를 설명하고 요약하는 역할만 한다.
 
 			다음 원칙을 반드시 지켜라.
-			- redness/trouble의 점수, 변화량, 상태(IMPROVED/WORSENED/UNCHANGED)는 이미 계산되어 주어진 값이다.
-			  너는 이 값을 새로 계산하거나 추정하지 않는다. 그대로 인용해서 해석에만 사용하라.
+			- redness/trouble의 점수, 변화량, 상태(IMPROVED/WORSENED/UNCHANGED), 변화 방향
+			  (rednessDirection/troubleDirection: INCREASED/STABLE/DECREASED), baseline(최초 분석) 대비 정보는
+			  전부 이미 계산되어 주어진 값이다. 너는 이 값을 새로 계산하거나 추정하지 않는다. 그대로 인용해서
+			  해석에만 사용하라.
+			- 수면/스트레스/수분 섭취의 GOOD/MODERATE/POOR 판정(sleepLevel/stressLevel/waterLevel)도 이미 계산되어
+			  주어진 값이다. 이 판정은 개인 기준선(최근 7일 평균) 또는 고정 기준표로 백엔드가 계산한 결과이므로,
+			  너는 raw 수치(시간/지수/ml)만 보고 이 등급을 다시 매기거나 뒤집지 않는다.
+			- causes(원인 후보 목록)는 candidateFactors에 주어진 요인으로만 작성한다. candidateFactors는 백엔드가
+			  "POOR로 판정되어 원인일 가능성이 높다"고 이미 확정한 목록이다. 이 목록에 없는 요인(GOOD/MODERATE로
+			  판정된, 즉 정상 범위인 요인 포함)은 causes에 절대 추가하지 마라 - 네가 추가해도 백엔드가 다시 걸러내
+			  최종 응답에는 반영되지 않는다. candidateFactors가 비어 있으면 causes도 반드시 빈 목록으로 반환하라.
 			- 피부 점수(숫자)를 새로 만들어내지 않는다. 네 응답에는 점수 필드 자체가 없다.
-			- 원인 후보(factor)는 반드시 SLEEP(수면) / STRESS(스트레스) / WATER_INTAKE(수분 섭취) 중에서만 고른다.
-			  이 세 가지 외의 요인(식습관, 화장품, 날씨 등)은 체크인 데이터에 없으므로 언급하지 않는다.
-			- 실제로 피부 변화와 관련 있어 보이는 요인만 causes에 포함한다. 억지로 개수를 채우지 않으며,
-			  뚜렷한 원인이 없으면 causes를 빈 목록으로 반환해도 된다.
 			- 각 원인 후보의 name은 "수면 부족"처럼 짧은 한국어 라벨, description은 해당 체크인 값(최근값/평균)과
-			  피부 변화를 근거로 1~2문장으로 설명한다.
+			  판정 등급, 피부 변화(상태/변화방향)를 근거로 1~2문장으로 설명한다.
+			- summary는 candidateFactors와 피부 변화를 종합해 한 문장으로 요약한다. candidateFactors가 비어 있으면
+			  뚜렷한 위험 요인이 없다는 취지로 요약하라(원인을 억지로 만들어내지 않는다).
 			- 질환명 또는 의학적 진단을 생성하지 않는다.
-			- summary는 전체 원인을 한 문장으로 요약한다.
 			""";
 
 	private final ChatClient chatClient;
@@ -245,25 +253,37 @@ public class AiClient {
 	private String buildCauseAnalysisUserText(AiDto.SkinChangeInput skinChange, AiDto.CheckinInput checkin) {
 		return """
 				[피부 변화 결과 - 이미 계산된 값, 다시 계산하지 말 것]
-				- redness(붉은기) 변화량: %d, 상태: %s
-				- trouble(트러블) 변화량: %d, 상태: %s
+				- redness(붉은기) 변화량: %d, 상태: %s, 변화 방향: %s
+				- trouble(트러블) 변화량: %d, 상태: %s, 변화 방향: %s
+				- baseline(최초 분석) 대비: %s (baseline 등급 참고용 - redness: %s, trouble: %s)
 
-				[체크인 데이터]
-				- 최근 수면 시간: %s시간 (이전 체크인 평균: %s시간)
-				- 최근 스트레스 지수(1~5): %s (이전 체크인 평균: %s)
-				- 최근 수분 섭취량(ml): %s (이전 체크인 평균: %sml)
+				[생활습관 요인 판정 - 이미 계산된 값, 다시 계산하지 말 것. 판정 기준: %s]
+				- 수면 판정: %s (참고용 raw 수치 - 최근: %s시간, 이전 평균: %s시간)
+				- 스트레스 판정: %s (참고용 raw 수치 - 최근: %s, 이전 평균: %s)
+				- 수분 섭취 판정: %s (참고용 raw 수치 - 최근: %sml, 이전 평균: %sml, 목표 대비 판정이므로 절대량만으로 다시 판단하지 말 것)
 
-				위 데이터를 바탕으로 피부 변화의 주요 원인 후보를 해석해줘.
+				[주요 위험 요인 후보 - 백엔드가 이미 확정함, causes는 반드시 이 목록 안에서만 작성할 것]
+				- candidateFactors: %s
+
+				위 데이터를 바탕으로 candidateFactors에 대한 원인 설명과 전체 요약을 작성해줘.
 				""".formatted(
-				skinChange.rednessChange(), skinChange.rednessStatus(),
-				skinChange.troubleChange(), skinChange.troubleStatus(),
-				checkin.latestSleepHours(), formatNullable(checkin.averageSleepHours()),
-				checkin.latestStressLevel(), formatNullable(checkin.averageStressLevel()),
-				checkin.latestWaterIntakeMl(), formatNullable(checkin.averageWaterIntakeMl())
+				skinChange.rednessChange(), skinChange.rednessStatus(), skinChange.rednessDirection(),
+				skinChange.troubleChange(), skinChange.troubleStatus(), skinChange.troubleDirection(),
+				skinChange.comparedAgainstBaseline() ? "직전 분석이 곧 baseline(두 번째 분석)" : "baseline은 직전 분석보다 더 이전 시점",
+				formatNullable(skinChange.baselineRednessLevel()), formatNullable(skinChange.baselineTroubleLevel()),
+				checkin.personalBaselineUsed() ? "개인 기준선(최근 7일 평균)" : "고정 기준표(체크인 이력 부족)",
+				checkin.sleepLevel(), checkin.latestSleepHours(), formatNullable(checkin.averageSleepHours()),
+				checkin.stressLevel(), checkin.latestStressLevel(), formatNullable(checkin.averageStressLevel()),
+				checkin.waterLevel(), checkin.latestWaterIntakeMl(), formatNullable(checkin.averageWaterIntakeMl()),
+				checkin.candidateFactors().isEmpty() ? "없음(뚜렷한 위험 요인 없음)" : checkin.candidateFactors()
 		);
 	}
 
 	private String formatNullable(Double value) {
 		return value == null ? "비교할 이전 기록 없음" : value.toString();
+	}
+
+	private String formatNullable(Object value) {
+		return value == null ? "정보 없음" : value.toString();
 	}
 }

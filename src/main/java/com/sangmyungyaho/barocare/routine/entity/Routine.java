@@ -63,4 +63,10 @@ public class Routine {
 	public void incomplete() {
 		this.isCompleted = false;
 	}
+
+	// 개인화 원인 분석 결과, 이 루틴의 카테고리에 해당하는 요인이 AI가 확인한 주요 원인 후보로도
+	// 지목됐을 때 강도를 격상한다("저강도" -> "적극개입"). 그 외 필드/생성 로직은 바꾸지 않는다.
+	public void escalateToActiveIntervention() {
+		this.intensity = "적극개입";
+	}
 }

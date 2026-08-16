@@ -38,13 +38,20 @@ public class SkinAnalysisController {
 					content = @Content(schema = @Schema(implementation = SkinAnalysisDto.Response.class))
 			),
 			@ApiResponse(
-					responseCode = "400", description = "입력값이 올바르지 않습니다.",
+					responseCode = "400", description = "입력값이 올바르지 않거나, 이미지 품질/분석 신뢰도가 부족해 재촬영이 필요합니다.",
 					content = @Content(
 							schema = @Schema(implementation = ErrorResponse.class),
-							examples = @ExampleObject(
-									name = "BAD_REQUEST",
-									value = "{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"입력값이 올바르지 않습니다.\"}}"
-							)
+							examples = {
+									@ExampleObject(
+											name = "BAD_REQUEST",
+											value = "{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"입력값이 올바르지 않습니다.\"}}"
+									),
+									@ExampleObject(
+											name = "SKIN_IMAGE_QUALITY_INSUFFICIENT",
+											summary = "재촬영 필요 - AI API 호출 자체는 성공했지만 이미지 품질/분석 신뢰도가 부족한 경우(502 AI_ANALYSIS_FAILED와 구분됨)",
+											value = "{\"error\":{\"code\":\"SKIN_IMAGE_QUALITY_INSUFFICIENT\",\"message\":\"이미지 품질 또는 분석 신뢰도가 부족합니다. 다시 촬영해주세요.\"}}"
+									)
+							}
 					)
 			),
 			@ApiResponse(
@@ -68,7 +75,9 @@ public class SkinAnalysisController {
 					)
 			),
 			@ApiResponse(
-					responseCode = "502", description = "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.",
+					responseCode = "502",
+					description = "AI API 호출 자체가 실패했습니다(네트워크/OpenAI 오류, 응답 파싱 실패 등). "
+							+ "400 SKIN_IMAGE_QUALITY_INSUFFICIENT(재촬영 필요)와는 원인이 다르므로 구분해서 처리해야 합니다.",
 					content = @Content(
 							schema = @Schema(implementation = ErrorResponse.class),
 							examples = @ExampleObject(
@@ -94,7 +103,8 @@ public class SkinAnalysisController {
 					+ "latest는 기간 내 가장 최근 분석 결과, average는 기간 내 등급의 최빈값이다 "
 					+ "(산술 평균이 아니다 — 현재 SkinAnalysis는 SAFE/CAUTION/DANGER 등급만 저장하고 숫자 점수를 저장하지 않는다. "
 					+ "동률이면 더 위험한 등급을 우선한다: DANGER > CAUTION > SAFE). "
-					+ "조회 기간 내 분석 기록이 없으면 latest/average는 null, history는 빈 배열로 반환한다."
+					+ "baseline은 조회 기간(period)과 무관하게 사용자의 최초 분석 결과를 그대로 반환한다(개인화 원인 분석의 기준점). "
+					+ "조회 기간 내 분석 기록이 없으면 latest/average는 null, history는 빈 배열로 반환한다(baseline은 전체 이력 기준이라 기간 밖 최초 분석이 있으면 계속 채워진다)."
 	)
 	@ApiResponses({
 			@ApiResponse(
@@ -110,11 +120,12 @@ public class SkinAnalysisController {
 													+ "\"history\":["
 													+ "{\"date\":\"2026-08-01\",\"redness_level\":\"DANGER\",\"trouble_level\":\"SAFE\"},"
 													+ "{\"date\":\"2026-08-10\",\"redness_level\":\"CAUTION\",\"trouble_level\":\"SAFE\"}"
-													+ "]}"
+													+ "],"
+													+ "\"baseline\":{\"redness_level\":\"DANGER\",\"trouble_level\":\"SAFE\"}}"
 									),
 									@ExampleObject(
 											name = "히스토리 없음",
-											value = "{\"period_days\":28,\"latest\":null,\"average\":null,\"history\":[]}"
+											value = "{\"period_days\":28,\"latest\":null,\"average\":null,\"history\":[],\"baseline\":null}"
 									)
 							}
 					)

@@ -12,6 +12,9 @@ import com.sangmyungyaho.barocare.skin.entity.SkinAnalysisLevel;
 import com.sangmyungyaho.barocare.skin.entity.SkinImage;
 import com.sangmyungyaho.barocare.skin.repository.SkinAnalysisRepository;
 import com.sangmyungyaho.barocare.skin.repository.SkinImageRepository;
+import com.sangmyungyaho.barocare.user.entity.SkinType;
+import com.sangmyungyaho.barocare.user.entity.User;
+import com.sangmyungyaho.barocare.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +58,7 @@ public class SkinAnalysisService {
 	private final ImageStorageService imageStorageService;
 	private final AiClient aiClient;
 	private final SkinGradeRubric skinGradeRubric;
+	private final UserRepository userRepository;
 
 	public SkinAnalysisDto.Response analyzeSkin(Long userId, SkinAnalysisDto.Request request) {
 		log.info("피부 분석 요청 시작: skinImageId={}", request.skinImageId());
@@ -79,13 +83,18 @@ public class SkinAnalysisService {
 		AiDto.SkinAnalysisResult result = aiClient.analyzeSkin(imageBytes, mimeType);
 		validateResult(result);
 
-		// 최종 등급은 GPT가 아니라 SkinGradeRubric이 고정 규칙으로 계산한다.
-		SkinAnalysisLevel rednessLevel = skinGradeRubric.calculateRednessLevel(result.redness());
-		SkinAnalysisLevel troubleLevel = skinGradeRubric.calculateTroubleLevel(result.trouble());
+		// 피부타입 보정(개인화): 사용자의 skinType을 조회해 등급 판정에 반영한다.
+		// 사용자를 찾을 수 없거나 피부타입을 아직 설정하지 않았으면(null) SkinGradeRubric이
+		// 기존과 동일한 기준으로 폴백하므로 분석 자체가 실패하지 않는다.
+		SkinType skinType = userRepository.findById(userId).map(User::getSkinType).orElse(null);
+
+		// 최종 등급은 GPT가 아니라 SkinGradeRubric이 고정 규칙(+피부타입 보정)으로 계산한다.
+		SkinAnalysisLevel rednessLevel = skinGradeRubric.calculateRednessLevel(result.redness(), skinType);
+		SkinAnalysisLevel troubleLevel = skinGradeRubric.calculateTroubleLevel(result.trouble(), skinType);
 		SkinAnalysisLevel skinLevel = skinGradeRubric.calculateSkinLevel(rednessLevel, troubleLevel);
 
-		log.info("최종 등급 계산 완료: skinImageId={}, rednessLevel={}, troubleLevel={}, skinLevel={}",
-				request.skinImageId(), rednessLevel, troubleLevel, skinLevel);
+		log.info("최종 등급 계산 완료: skinImageId={}, skinType={}, rednessLevel={}, troubleLevel={}, skinLevel={}",
+				request.skinImageId(), skinType, rednessLevel, troubleLevel, skinLevel);
 
 		SkinAnalysis skinAnalysis = new SkinAnalysis(
 				userId, skinImage,
@@ -109,9 +118,14 @@ public class SkinAnalysisService {
 		LocalDateTime from = LocalDate.now().minusDays(periodDays - 1L).atStartOfDay();
 		List<SkinAnalysis> analyses = skinAnalysisRepository.findAllByUserIdAndAnalyzedAtBetweenOrderByAnalyzedAtAsc(userId, from, LocalDateTime.now());
 
+		// baseline(최초 분석)은 조회 기간(period)과 무관하게 사용자 전체 이력 기준으로 별도 조회한다.
+		SkinAnalysisDto.LevelPoint baseline = skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(userId)
+				.map(SkinAnalysisDto.LevelPoint::from)
+				.orElse(null);
+
 		if (analyses.isEmpty()) {
 			log.info("피부 분석 히스토리 없음: periodDays={}, from={}", periodDays, from);
-			return SkinAnalysisDto.HistoryResponse.empty(periodDays);
+			return SkinAnalysisDto.HistoryResponse.empty(periodDays, baseline);
 		}
 
 		// 오름차순 정렬된 리스트이므로 마지막 원소가 곧 최신 분석이다.
@@ -130,7 +144,8 @@ public class SkinAnalysisService {
 				periodDays,
 				SkinAnalysisDto.LevelPoint.from(latest),
 				SkinAnalysisDto.LevelPoint.of(rednessMode, troubleMode),
-				history
+				history,
+				baseline
 		);
 	}
 
@@ -152,11 +167,12 @@ public class SkinAnalysisService {
 	}
 
 	/**
-	 * GPT 관찰값의 구조적 완전성만 검증한다(등급 판단은 여기서 하지 않는다).
-	 * 다음 중 하나라도 해당하면 저장하지 않고 AI_ANALYSIS_FAILED로 처리한다.
-	 * - redness/trouble/imageQuality 구조 자체가 비어 있음(파싱 불완전)
-	 * - affectedRegions가 아예 없음(null, 응답 형식 오류 — 빈 목록은 정상)
+	 * GPT 관찰값을 검증한다(등급 판단은 여기서 하지 않는다). 실패 사유에 따라 서로 다른 ErrorCode를 던져
+	 * 프론트가 "재촬영 필요"와 "서버/AI 분석 실패"를 구분할 수 있게 한다.
+	 * - redness/trouble/imageQuality 구조 자체가 비어 있거나 affectedRegions가 없음(응답 형식 오류)
+	 *   → AI_ANALYSIS_FAILED(502): AI 응답 자체가 이상한 경우로, 사용자의 사진 품질 문제가 아니다.
 	 * - 이미지 품질(조명/블러/각도/얼굴 비율) 중 POOR 개수가 {@link #MAX_ALLOWED_POOR_QUALITY_COUNT}를 초과
+	 *   → SKIN_IMAGE_QUALITY_INSUFFICIENT(400): 사용자가 다시 촬영해야 하는 경우.
 	 */
 	private void validateResult(AiDto.SkinAnalysisResult result) {
 		if (result == null || result.redness() == null || result.trouble() == null || result.imageQuality() == null) {
@@ -169,9 +185,9 @@ public class SkinAnalysisService {
 		}
 		int poorQualityCount = countPoorQuality(result.imageQuality());
 		if (poorQualityCount > MAX_ALLOWED_POOR_QUALITY_COUNT) {
-			log.warn("AI 분석 검증 실패: 이미지 품질 부족(POOR {}개, 허용 {}개) - {}",
+			log.warn("이미지 품질 부족(재촬영 필요, POOR {}개, 허용 {}개) - {}",
 					poorQualityCount, MAX_ALLOWED_POOR_QUALITY_COUNT, result.imageQuality());
-			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+			throw new GlobalException(ErrorCode.SKIN_IMAGE_QUALITY_INSUFFICIENT);
 		}
 	}
 

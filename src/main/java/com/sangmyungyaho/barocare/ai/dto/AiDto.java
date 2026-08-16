@@ -1,11 +1,13 @@
 package com.sangmyungyaho.barocare.ai.dto;
 
+import com.sangmyungyaho.barocare.report.entity.LifestyleFactorLevel;
 import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
 import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
 import com.sangmyungyaho.barocare.skin.entity.FaceRegion;
 import com.sangmyungyaho.barocare.skin.entity.ImageQualityRating;
 import com.sangmyungyaho.barocare.skin.entity.RednessIntensity;
+import com.sangmyungyaho.barocare.skin.entity.SkinAnalysisLevel;
 import com.sangmyungyaho.barocare.skin.entity.TroubleDensity;
 
 import java.util.List;
@@ -71,18 +73,41 @@ public class AiDto {
 	/**
 	 * 피부 변화 원인 분석(REP-101)에 전달하는 입력값. 점수/변화량/상태는 이미 Java에서 확정적으로
 	 * 계산된 값이며, AI는 이 값을 그대로 참고할 뿐 다시 계산하거나 새로운 점수를 만들지 않는다.
+	 *
+	 * rednessStatus/troubleStatus(IMPROVED/WORSENED/UNCHANGED)가 점수 기준의 "공식" 변화 판정이다.
+	 * rednessDirection/troubleDirection(INCREASED/STABLE/DECREASED)은 피부 변화 비교(baseline/직전 분석)
+	 * 단계의 보조 신호로, 이미 계산된 SkinComparison(AI 이미지 비교)이 있으면 그 값을, 없으면 status로부터
+	 * 결정적으로 유도한 값을 담는다(GPT 재호출 없음) - skin-signal(getLatestSkinSignal)과 동일한 규칙이다.
+	 * baseline*Level/comparedAgainstBaseline은 "최초 분석(baseline)"과의 관계를 보조 컨텍스트로 제공한다:
+	 * comparedAgainstBaseline=true면 previous가 곧 baseline(사용자의 두 번째 분석)이라는 뜻이고,
+	 * false면 previous보다 더 이전에 baseline이 따로 있다는 뜻이다(baseline*Level은 참고용 등급).
 	 */
 	public record SkinChangeInput(
 			Integer rednessChange,
 			ReportChangeStatus rednessStatus,
+			ChangeDirection rednessDirection,
 			Integer troubleChange,
-			ReportChangeStatus troubleStatus
+			ReportChangeStatus troubleStatus,
+			ChangeDirection troubleDirection,
+			boolean comparedAgainstBaseline,
+			SkinAnalysisLevel baselineRednessLevel,
+			SkinAnalysisLevel baselineTroubleLevel
 	) {
 	}
 
 	/**
 	 * 원인 분석에 참고하는 체크인 데이터. average* 필드는 최신 체크인을 제외한 이전 체크인들의 평균이며,
 	 * 비교할 이전 체크인이 없으면 null이다(둘 다 Java가 계산해서 전달하는 값 - AI는 계산하지 않는다).
+	 *
+	 * sleepLevel/stressLevel/waterLevel은 {@code LifestyleFactorRubric}이 이미 판정해서 전달하는 값이다 -
+	 * GPT가 raw 수치를 보고 임의로 등급을 정하지 않도록, "부족/보통/충분"에 해당하는 판정을 먼저 계산해서 넘긴다.
+	 * personalBaselineUsed는 그 판정이 개인 기준선(최근 7일 평균) 기준인지, 고정 기준표 기준인지를 나타낸다
+	 * (체크인 이력이 부족한 신규 사용자는 고정 기준표가 쓰인다).
+	 *
+	 * candidateFactors는 백엔드가 이미 "주요 위험 요인 후보"로 확정한 목록이다(sleepLevel/stressLevel/waterLevel
+	 * 중 POOR로 판정된 요인만). GPT는 이 목록 밖의 요인을 causes에 추가하거나, 이 목록에 있는 요인을 임의로
+	 * 빼지 않는다 - ReportService가 최종적으로 이 목록 기준으로 causes를 한 번 더 걸러내므로, GPT가 이 지침을
+	 * 어겨도 목록 밖 요인이 최종 응답에 남지 않는다(코드 레벨 강제).
 	 */
 	public record CheckinInput(
 			Double latestSleepHours,
@@ -90,7 +115,12 @@ public class AiDto {
 			Integer latestWaterIntakeMl,
 			Double averageSleepHours,
 			Double averageStressLevel,
-			Double averageWaterIntakeMl
+			Double averageWaterIntakeMl,
+			LifestyleFactorLevel sleepLevel,
+			LifestyleFactorLevel stressLevel,
+			LifestyleFactorLevel waterLevel,
+			boolean personalBaselineUsed,
+			List<ReportCauseFactor> candidateFactors
 	) {
 	}
 
