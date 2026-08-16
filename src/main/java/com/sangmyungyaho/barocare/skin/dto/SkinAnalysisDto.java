@@ -83,11 +83,18 @@ public class SkinAnalysisDto {
 			LevelPoint average,
 
 			@Schema(description = "조회 기간 내 분석 이력(날짜 오름차순)")
-			List<HistoryItem> history
+			List<HistoryItem> history,
+
+			@Schema(
+					description = "사용자의 최초(baseline) 피부 분석 결과. 조회 기간(period)과 무관하게 전체 이력 기준 "
+							+ "첫 분석이며, 분석 기록이 아예 없으면 null.",
+					nullable = true
+			)
+			LevelPoint baseline
 	) {
 
-		public static HistoryResponse empty(Integer periodDays) {
-			return new HistoryResponse(periodDays, null, null, List.of());
+		public static HistoryResponse empty(Integer periodDays, LevelPoint baseline) {
+			return new HistoryResponse(periodDays, null, null, List.of(), baseline);
 		}
 	}
 
