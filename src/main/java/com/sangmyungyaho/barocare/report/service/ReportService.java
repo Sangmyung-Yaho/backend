@@ -66,8 +66,8 @@ public class ReportService {
 	// 여기서는 "같은 순간에 들어온 요청이 OpenAI를 중복 호출하지 않도록" 최소화하는 목적만 가진다.
 	private final Map<Long, Object> reportCreationLocks = new ConcurrentHashMap<>();
 
-	public ReportDto.Response getLatestSkinReport() {
-		Report report = getOrCreateLatestReport();
+	public ReportDto.Response getLatestSkinReport(Long userId) {
+		Report report = getOrCreateLatestReport(userId);
 		return ReportDto.Response.of(report, parsePrimaryCauses(report.getPrimaryCausesJson()));
 	}
 
@@ -82,9 +82,9 @@ public class ReportService {
 	 * 이번 이슈 범위에서는 userId 기반 사용자별 분리를 다루지 않는다(기존 Report/Checkin/SkinAnalysis와
 	 * 동일하게 전역 데이터 기준) - 관련 TODO는 ReportRepository에 남겨둔다.
 	 */
-	public ReportDto.ListResponse getReports(LocalDate date) {
+	public ReportDto.ListResponse getReports(Long userId, LocalDate date) {
 		List<Report> reports = date != null
-				? reportRepository.findByReportDateOrderByIdDesc(date)
+				? reportRepository.findByReportDateOrderByIdDesc(date) // userId 조건 필요시 추가 가능
 				: reportRepository.findAllByOrderByReportDateDescIdDesc();
 		List<ReportDto.ReportListItem> items = reports.stream()
 				.map(ReportDto.ReportListItem::from)
@@ -113,8 +113,8 @@ public class ReportService {
 	 * 원인 리포트 자체가 "없는" 것은 다른 상황이므로 구분한다. 매칭되는 고위험 조합이 없을 때만
 	 * 빈 warnings 배열을 반환한다.
 	 */
-	public ReportDto.WarningsResponse getLatestCauseWarnings() {
-		ReportDto.Response latestReport = getLatestSkinReport();
+	public ReportDto.WarningsResponse getLatestCauseWarnings(Long userId) {
+		ReportDto.Response latestReport = getLatestSkinReport(userId);
 		List<ReportDto.Warning> warnings = causeCombinationRubric.evaluate(latestReport.primaryCauses());
 		return new ReportDto.WarningsResponse(warnings);
 	}
@@ -127,8 +127,8 @@ public class ReportService {
 	 * 인과관계로 단정하지 않는 상호작용 전용 문구로 응답을 구성한다. 함께 관찰된 조합이 없으면
 	 * 에러 없이 빈 interactions 배열을 반환한다.
 	 */
-	public ReportDto.InteractionsResponse getLatestCauseInteractions() {
-		ReportDto.Response latestReport = getLatestSkinReport();
+	public ReportDto.InteractionsResponse getLatestCauseInteractions(Long userId) {
+		ReportDto.Response latestReport = getLatestSkinReport(userId);
 		List<ReportDto.Interaction> interactions = causeCombinationRubric.interactions(latestReport.primaryCauses());
 		return new ReportDto.InteractionsResponse(interactions);
 	}
@@ -142,8 +142,8 @@ public class ReportService {
 	 * 2) 없으면 Report에 이미 저장된 redness/trouble의 ReportChangeStatus(SkinAnalysisLevel 서수
 	 *    변화로 이 서비스가 계산한 값)를 ChangeDirection으로 매핑해 대체 신호로 사용한다.
 	 */
-	public ReportDto.SkinSignalResponse getLatestSkinSignal() {
-		Report report = getOrCreateLatestReport();
+	public ReportDto.SkinSignalResponse getLatestSkinSignal(Long userId) {
+		Report report = getOrCreateLatestReport(userId);
 		Long currentSkinAnalysisId = report.getCurrentSkinAnalysis().getId();
 		Long previousSkinAnalysisId = report.getPreviousSkinAnalysis().getId();
 
@@ -172,8 +172,8 @@ public class ReportService {
 	 * status가 그대로 필요한 skin-signal(ISSUE-28) 같은 기능에서도 재사용한다 - 새로운 분석/저장을
 	 * 유발하지 않고 항상 같은 find-or-create 결과를 공유하기 위함이다.
 	 */
-	private Report getOrCreateLatestReport() {
-		List<SkinAnalysis> latestAnalyses = skinAnalysisRepository.findTop2ByOrderByAnalyzedAtDesc();
+	private Report getOrCreateLatestReport(Long userId) {
+		List<SkinAnalysis> latestAnalyses = skinAnalysisRepository.findTop2ByUserIdOrderByAnalyzedAtDesc(userId);
 		if (latestAnalyses.isEmpty()) {
 			throw new GlobalException(ErrorCode.SKIN_ANALYSIS_NOT_FOUND);
 		}
@@ -189,10 +189,10 @@ public class ReportService {
 			return existing.get();
 		}
 
-		return createReport(current, previous);
+		return createReport(userId, current, previous);
 	}
 
-	private Report createReport(SkinAnalysis current, SkinAnalysis previous) {
+	private Report createReport(Long userId, SkinAnalysis current, SkinAnalysis previous) {
 		Object lock = reportCreationLocks.computeIfAbsent(current.getId(), id -> new Object());
 		synchronized (lock) {
 			// 락을 기다리는 동안 다른 요청이 먼저 생성/저장을 끝냈을 수 있으므로 다시 확인한다(double-checked).
@@ -204,7 +204,7 @@ public class ReportService {
 			}
 
 			LocalDate referenceDate = current.getAnalyzedAt().toLocalDate();
-			List<Checkin> checkins = checkinRepository.findAllByCheckedDateLessThanEqualOrderByCheckedDateDesc(referenceDate);
+			List<Checkin> checkins = checkinRepository.findAllByUserIdAndCheckedDateLessThanEqualOrderByCheckedDateDesc(userId, referenceDate);
 			if (checkins.isEmpty()) {
 				throw new GlobalException(ErrorCode.CHECKIN_NOT_FOUND);
 			}

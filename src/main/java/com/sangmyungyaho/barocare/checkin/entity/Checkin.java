@@ -23,7 +23,7 @@ import java.time.LocalDate;
 @Entity
 @Table(
 		name = "checkin",
-		uniqueConstraints = @UniqueConstraint(name = "uk_checkin_checked_date", columnNames = "checked_date")
+		uniqueConstraints = @UniqueConstraint(name = "uk_checkin_user_id_checked_date", columnNames = {"user_id", "checked_date"})
 )
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -33,6 +33,9 @@ public class Checkin {
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	@Column(name = "checkin_id")
 	private Long id;
+
+	@Column(name = "user_id", nullable = false)
+	private Long userId;
 
 	@Column(name = "sleep_hours", nullable = false)
 	private Double sleepHours;
@@ -46,7 +49,8 @@ public class Checkin {
 	@Column(name = "checked_date", nullable = false)
 	private LocalDate checkedDate;
 
-	public Checkin(Double sleepHours, Integer stressLevel, Integer waterIntakeMl, LocalDate checkedDate) {
+	public Checkin(Long userId, Double sleepHours, Integer stressLevel, Integer waterIntakeMl, LocalDate checkedDate) {
+		this.userId = userId;
 		this.sleepHours = sleepHours;
 		this.stressLevel = stressLevel;
 		this.waterIntakeMl = waterIntakeMl;

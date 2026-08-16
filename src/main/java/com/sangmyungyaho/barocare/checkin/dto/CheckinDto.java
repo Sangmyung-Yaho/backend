@@ -40,8 +40,8 @@ public class CheckinDto {
 			LocalDate checkedDate
 	) {
 
-		public Checkin toEntity() {
-			return new Checkin(sleepHours, stressLevel, waterIntakeMl, checkedDate);
+		public Checkin toEntity(Long userId) {
+			return new Checkin(userId, sleepHours, stressLevel, waterIntakeMl, checkedDate);
 		}
 	}
 

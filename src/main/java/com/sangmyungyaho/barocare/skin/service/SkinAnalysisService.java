@@ -56,7 +56,7 @@ public class SkinAnalysisService {
 	private final AiClient aiClient;
 	private final SkinGradeRubric skinGradeRubric;
 
-	public SkinAnalysisDto.Response analyzeSkin(SkinAnalysisDto.Request request) {
+	public SkinAnalysisDto.Response analyzeSkin(Long userId, SkinAnalysisDto.Request request) {
 		log.info("피부 분석 요청 시작: skinImageId={}", request.skinImageId());
 
 		SkinImage skinImage = skinImageRepository.findById(request.skinImageId())
@@ -82,7 +82,7 @@ public class SkinAnalysisService {
 				request.skinImageId(), rednessLevel, troubleLevel, skinLevel);
 
 		SkinAnalysis skinAnalysis = new SkinAnalysis(
-				skinImage,
+				userId, skinImage,
 				rednessLevel, result.redness().affectedRegions(), result.redness().maxIntensity(),
 				troubleLevel, result.trouble().affectedRegions(), result.trouble().density(),
 				skinLevel,
@@ -99,9 +99,9 @@ public class SkinAnalysisService {
 	 * period(일) 동안의 분석 이력을, 등급(SAFE/CAUTION/DANGER) 기준으로 반환한다.
 	 * average는 산술 평균이 아니라 최빈 등급이다 — {@link #calculateModeLevel} 참고.
 	 */
-	public SkinAnalysisDto.HistoryResponse getHistory(int periodDays) {
+	public SkinAnalysisDto.HistoryResponse getHistory(Long userId, int periodDays) {
 		LocalDateTime from = LocalDate.now().minusDays(periodDays - 1L).atStartOfDay();
-		List<SkinAnalysis> analyses = skinAnalysisRepository.findByAnalyzedAtGreaterThanEqualOrderByAnalyzedAtAsc(from);
+		List<SkinAnalysis> analyses = skinAnalysisRepository.findAllByUserIdAndAnalyzedAtBetweenOrderByAnalyzedAtAsc(userId, from, LocalDateTime.now());
 
 		if (analyses.isEmpty()) {
 			log.info("피부 분석 히스토리 없음: periodDays={}, from={}", periodDays, from);

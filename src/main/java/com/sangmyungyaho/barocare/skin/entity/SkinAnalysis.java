@@ -46,6 +46,9 @@ public class SkinAnalysis {
 	@Column(name = "skin_analysis_id")
 	private Long id;
 
+	@Column(name = "user_id", nullable = false)
+	private Long userId;
+
 	// FK 제약 없이 참조만 유지(프로젝트 컨벤션).
 	@ManyToOne(fetch = FetchType.LAZY)
 	@JoinColumn(name = "skin_image_id", nullable = false, foreignKey = @ForeignKey(ConstraintMode.NO_CONSTRAINT))
@@ -104,7 +107,7 @@ public class SkinAnalysis {
 	private LocalDateTime analyzedAt;
 
 	public SkinAnalysis(
-			SkinImage skinImage,
+			Long userId, SkinImage skinImage,
 			SkinAnalysisLevel rednessLevel, List<FaceRegion> rednessAffectedRegions, RednessIntensity rednessMaxIntensity,
 			SkinAnalysisLevel troubleLevel, List<FaceRegion> troubleAffectedRegions, TroubleDensity troubleDensity,
 			SkinAnalysisLevel skinLevel,
@@ -112,6 +115,7 @@ public class SkinAnalysis {
 			ImageQualityRating imageQualityAngle, ImageQualityRating imageQualityFaceRatio,
 			String rubricVersion
 	) {
+		this.userId = userId;
 		this.skinImage = skinImage;
 		this.rednessLevel = rednessLevel;
 		this.rednessAffectedRegions = joinRegions(rednessAffectedRegions);
