@@ -14,6 +14,7 @@ public enum ErrorCode {
 	SKIN_IMAGE_QUALITY_INSUFFICIENT(HttpStatus.BAD_REQUEST, "이미지 품질 또는 분석 신뢰도가 부족합니다. 다시 촬영해주세요."),
 	AI_ANALYSIS_FAILED(HttpStatus.BAD_GATEWAY, "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요."),
 	CHECKIN_NOT_FOUND(HttpStatus.NOT_FOUND, "원인 분석에 필요한 체크인 기록이 없습니다."),
+	TODAY_CHECKIN_NOT_FOUND(HttpStatus.NOT_FOUND, "오늘의 체크인 기록이 없습니다."),
 	INSUFFICIENT_ANALYSIS_DATA(HttpStatus.UNPROCESSABLE_CONTENT, "피부 변화를 비교하기 위한 기록이 충분하지 않습니다."),
 	REPORT_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 리포트입니다."),
 	ROUTINE_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 루틴입니다."),

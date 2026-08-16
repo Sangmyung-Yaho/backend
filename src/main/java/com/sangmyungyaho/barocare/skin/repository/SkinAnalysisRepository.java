@@ -18,4 +18,8 @@ public interface SkinAnalysisRepository extends JpaRepository<SkinAnalysis, Long
 	// 개인화 피부 원인 분석: 사용자의 최초(baseline) 피부 분석을 명확하게 구분해서 조회한다.
 	// 조회 기간(period)과 무관하게 사용자 전체 이력 기준 첫 분석이다.
 	Optional<SkinAnalysis> findFirstByUserIdOrderByAnalyzedAtAsc(Long userId);
+
+	// 피부 분석 상세 조회(프론트 화면 연동): 특정 분석 기준으로 그 직전(바로 이전) 분석을 조회한다.
+	// findTop2ByUserIdOrderByAnalyzedAtDesc는 항상 "최신" 기준이라, 임의의(과거) 분석 기준으로는 쓸 수 없다.
+	Optional<SkinAnalysis> findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(Long userId, LocalDateTime analyzedAt);
 }
