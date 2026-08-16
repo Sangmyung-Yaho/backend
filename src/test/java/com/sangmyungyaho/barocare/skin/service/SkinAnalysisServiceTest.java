@@ -197,6 +197,120 @@ class SkinAnalysisServiceTest {
 		verify(skinAnalysisRepository, never()).save(any());
 	}
 
+	@Test
+	void 상세조회시_직전_분석이_있으면_baseline이_아니고_변화_상태를_계산한다() {
+		// feat: 프론트 화면 연동을 위한 조회 API - 피부 분석 상세 조회.
+		SkinAnalysis previous = analysisAt(LocalDate.of(2026, 8, 1), SkinAnalysisLevel.DANGER, SkinAnalysisLevel.CAUTION);
+		ReflectionTestUtils.setField(previous, "id", 8L);
+		SkinAnalysis current = analysisAt(LocalDate.of(2026, 8, 10), SkinAnalysisLevel.CAUTION, SkinAnalysisLevel.CAUTION);
+		ReflectionTestUtils.setField(current, "id", 12L);
+
+		when(skinAnalysisRepository.findById(12L)).thenReturn(Optional.of(current));
+		when(skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(USER_ID)).thenReturn(Optional.of(previous)); // baseline != current
+		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, current.getAnalyzedAt()))
+				.thenReturn(Optional.of(previous));
+
+		SkinAnalysisDto.DetailResponse response = skinAnalysisService.getDetail(USER_ID, 12L);
+
+		assertThat(response.skinAnalysisId()).isEqualTo(12L);
+		assertThat(response.isBaseline()).isFalse();
+		assertThat(response.previousSkinAnalysisId()).isEqualTo(8L);
+		// redness: DANGER(2) -> CAUTION(1), change=-1 -> IMPROVED
+		assertThat(response.rednessChangeStatus()).isEqualTo(com.sangmyungyaho.barocare.report.entity.ReportChangeStatus.IMPROVED);
+		// trouble: CAUTION(1) -> CAUTION(1), change=0 -> UNCHANGED
+		assertThat(response.troubleChangeStatus()).isEqualTo(com.sangmyungyaho.barocare.report.entity.ReportChangeStatus.UNCHANGED);
+	}
+
+	@Test
+	void 상세조회시_직전_분석이_없으면_baseline이고_변화_상태는_null이다() {
+		SkinAnalysis onlyAnalysis = analysisAt(LocalDate.of(2026, 8, 1), SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE);
+		ReflectionTestUtils.setField(onlyAnalysis, "id", 5L);
+
+		when(skinAnalysisRepository.findById(5L)).thenReturn(Optional.of(onlyAnalysis));
+		when(skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(USER_ID)).thenReturn(Optional.of(onlyAnalysis));
+		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, onlyAnalysis.getAnalyzedAt()))
+				.thenReturn(Optional.empty());
+
+		SkinAnalysisDto.DetailResponse response = skinAnalysisService.getDetail(USER_ID, 5L);
+
+		assertThat(response.isBaseline()).isTrue();
+		assertThat(response.previousSkinAnalysisId()).isNull();
+		assertThat(response.rednessChangeStatus()).isNull();
+		assertThat(response.troubleChangeStatus()).isNull();
+	}
+
+	@Test
+	void 상세조회시_다른_사용자의_분석이면_FORBIDDEN을_던진다() {
+		SkinAnalysis othersAnalysis = analysisAt(LocalDate.of(2026, 8, 1), SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE);
+		ReflectionTestUtils.setField(othersAnalysis, "id", 9L);
+		ReflectionTestUtils.setField(othersAnalysis, "userId", OTHER_USER_ID);
+		when(skinAnalysisRepository.findById(9L)).thenReturn(Optional.of(othersAnalysis));
+
+		assertThatThrownBy(() -> skinAnalysisService.getDetail(USER_ID, 9L))
+				.isInstanceOf(GlobalException.class)
+				.extracting(e -> ((GlobalException) e).getErrorCode())
+				.isEqualTo(ErrorCode.FORBIDDEN);
+	}
+
+	@Test
+	void 상세조회시_존재하지_않으면_SKIN_ANALYSIS_NOT_FOUND를_던진다() {
+		when(skinAnalysisRepository.findById(999L)).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> skinAnalysisService.getDetail(USER_ID, 999L))
+				.isInstanceOf(GlobalException.class)
+				.extracting(e -> ((GlobalException) e).getErrorCode())
+				.isEqualTo(ErrorCode.SKIN_ANALYSIS_NOT_FOUND);
+	}
+
+	@Test
+	void 최신_상세조회는_분석이_2건_이상이면_baseline이_아니고_변화_상태를_계산한다() {
+		// feat: 홈 대시보드 통합 조회 - findTop2 한 번으로 최신+직전을 동시에 구하는지 검증한다(추가 조회 없음).
+		SkinAnalysis previous = analysisAt(LocalDate.of(2026, 8, 1), SkinAnalysisLevel.DANGER, SkinAnalysisLevel.CAUTION);
+		ReflectionTestUtils.setField(previous, "id", 8L);
+		SkinAnalysis latest = analysisAt(LocalDate.of(2026, 8, 10), SkinAnalysisLevel.CAUTION, SkinAnalysisLevel.CAUTION);
+		ReflectionTestUtils.setField(latest, "id", 12L);
+
+		when(skinAnalysisRepository.findTop2ByUserIdOrderByAnalyzedAtDesc(USER_ID)).thenReturn(List.of(latest, previous));
+		when(skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(USER_ID)).thenReturn(Optional.of(previous));
+
+		Optional<SkinAnalysisDto.DetailResponse> result = skinAnalysisService.getLatestDetailForUser(USER_ID);
+
+		assertThat(result).isPresent();
+		assertThat(result.get().skinAnalysisId()).isEqualTo(12L);
+		assertThat(result.get().isBaseline()).isFalse();
+		assertThat(result.get().previousSkinAnalysisId()).isEqualTo(8L);
+		assertThat(result.get().rednessChangeStatus())
+				.isEqualTo(com.sangmyungyaho.barocare.report.entity.ReportChangeStatus.IMPROVED);
+		verify(skinAnalysisRepository, never())
+				.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(any(), any());
+	}
+
+	@Test
+	void 최신_상세조회는_분석이_1건뿐이면_baseline이고_변화_상태는_null이다() {
+		SkinAnalysis onlyAnalysis = analysisAt(LocalDate.of(2026, 8, 1), SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE);
+		ReflectionTestUtils.setField(onlyAnalysis, "id", 5L);
+
+		when(skinAnalysisRepository.findTop2ByUserIdOrderByAnalyzedAtDesc(USER_ID)).thenReturn(List.of(onlyAnalysis));
+		when(skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(USER_ID)).thenReturn(Optional.of(onlyAnalysis));
+
+		Optional<SkinAnalysisDto.DetailResponse> result = skinAnalysisService.getLatestDetailForUser(USER_ID);
+
+		assertThat(result).isPresent();
+		assertThat(result.get().isBaseline()).isTrue();
+		assertThat(result.get().previousSkinAnalysisId()).isNull();
+		assertThat(result.get().rednessChangeStatus()).isNull();
+	}
+
+	@Test
+	void 최신_상세조회는_분석이_전혀_없으면_빈_Optional을_반환하고_새로_분석하지_않는다() {
+		when(skinAnalysisRepository.findTop2ByUserIdOrderByAnalyzedAtDesc(USER_ID)).thenReturn(List.of());
+
+		Optional<SkinAnalysisDto.DetailResponse> result = skinAnalysisService.getLatestDetailForUser(USER_ID);
+
+		assertThat(result).isEmpty();
+		verifyNoInteractions(aiClient);
+	}
+
 	private SkinAnalysis analysisAt(LocalDate date, SkinAnalysisLevel rednessLevel, SkinAnalysisLevel troubleLevel) {
 		SkinImage skinImage = new SkinImage(USER_ID, "http://example.com/image.jpg", "stored.jpg");
 		SkinAnalysis skinAnalysis = new SkinAnalysis(
