@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 public interface CheckinRepository extends JpaRepository<Checkin, Long> {
 
@@ -13,4 +14,10 @@ public interface CheckinRepository extends JpaRepository<Checkin, Long> {
 	// 피부 변화 원인 리포트(REP-101)에서, 분석 대상 SkinAnalysis의 analyzedAt 이전(포함) 체크인 중
 	// 가장 가까운 값과 그 이전 체크인들의 평균을 계산하기 위한 조회. 첫 번째 원소가 "가장 가까운" 체크인이다.
 	List<Checkin> findAllByUserIdAndCheckedDateLessThanEqualOrderByCheckedDateDesc(Long userId, LocalDate checkedDate);
+
+	// 프론트 화면 연동: 오늘의 체크인 조회.
+	Optional<Checkin> findByUserIdAndCheckedDate(Long userId, LocalDate checkedDate);
+
+	// 프론트 화면 연동: 기간별 체크인 조회(startDate~endDate 포함, 날짜 오름차순 — SkinAnalysis 히스토리와 동일한 정렬 관례).
+	List<Checkin> findAllByUserIdAndCheckedDateBetweenOrderByCheckedDateAsc(Long userId, LocalDate startDate, LocalDate endDate);
 }

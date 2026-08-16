@@ -10,6 +10,10 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDate;
+import java.util.List;
 
 /**
  * 체크인 저장과 루틴 생성(원인 분석/AI 호출 가능) 사이의 결합도를 낮춘다.
@@ -48,5 +52,28 @@ public class CheckinService {
 		}
 
 		return CheckinDto.Response.from(checkin);
+	}
+
+	/**
+	 * 오늘의 체크인 조회(프론트 화면 연동). userId는 인증된 사용자 기준으로만 조회하므로
+	 * 다른 사용자의 체크인을 조회할 방법이 없다.
+	 */
+	@Transactional(readOnly = true)
+	public CheckinDto.Response getTodayCheckin(Long userId) {
+		Checkin checkin = checkinRepository.findByUserIdAndCheckedDate(userId, LocalDate.now())
+				.orElseThrow(() -> new GlobalException(ErrorCode.TODAY_CHECKIN_NOT_FOUND));
+		return CheckinDto.Response.from(checkin);
+	}
+
+	/**
+	 * 기간별(startDate~endDate 포함) 체크인 조회(프론트 화면 연동). 날짜 오름차순으로 반환하며,
+	 * 기록이 없으면 에러 없이 빈 목록을 반환한다(SkinAnalysis 히스토리 조회와 동일한 관례).
+	 */
+	@Transactional(readOnly = true)
+	public List<CheckinDto.Response> getCheckinsByDateRange(Long userId, LocalDate startDate, LocalDate endDate) {
+		return checkinRepository.findAllByUserIdAndCheckedDateBetweenOrderByCheckedDateAsc(userId, startDate, endDate)
+				.stream()
+				.map(CheckinDto.Response::from)
+				.toList();
 	}
 }
