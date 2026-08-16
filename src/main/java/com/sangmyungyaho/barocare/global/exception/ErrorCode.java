@@ -19,7 +19,8 @@ public enum ErrorCode {
 	FORBIDDEN(HttpStatus.FORBIDDEN, "해당 리소스에 접근할 권한이 없습니다."),
 	UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다. (토큰 만료/유효하지 않음)"),
 	OAUTH_PROVIDER_NOT_SUPPORTED(HttpStatus.BAD_REQUEST, "지원하지 않는 소셜 플랫폼입니다."),
-	OAUTH_API_FAILED(HttpStatus.BAD_GATEWAY, "소셜 로그인 API 호출에 실패했습니다.");
+	OAUTH_API_FAILED(HttpStatus.BAD_GATEWAY, "소셜 로그인 API 호출에 실패했습니다."),
+	ONBOARDING_AGREEMENT_REQUIRED(HttpStatus.BAD_REQUEST, "온보딩을 완료하려면 이용약관 및 개인정보 수집·이용에 동의해야 합니다.");
 
 	private final HttpStatus status;
 	private final String message;
