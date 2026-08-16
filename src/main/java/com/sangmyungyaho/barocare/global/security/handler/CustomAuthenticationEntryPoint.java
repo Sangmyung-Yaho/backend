@@ -8,17 +8,20 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import lombok.RequiredArgsConstructor;
 
 @Component
 public class CustomAuthenticationEntryPoint implements AuthenticationEntryPoint {
+
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException) throws IOException, ServletException {
         response.setContentType("application/json;charset=UTF-8");
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         
-        // 간단한 JSON 응답 작성
-        String jsonResponse = String.format("{\"error\": \"Unauthorized\", \"message\": \"%s\"}", "토큰이 유효하지 않거나 존재하지 않습니다.");
+        com.sangmyungyaho.barocare.global.exception.ErrorResponse errorResponse = com.sangmyungyaho.barocare.global.exception.ErrorResponse.of(com.sangmyungyaho.barocare.global.exception.ErrorCode.UNAUTHORIZED);
+        String jsonResponse = objectMapper.writeValueAsString(errorResponse);
         response.getWriter().write(jsonResponse);
     }
 }

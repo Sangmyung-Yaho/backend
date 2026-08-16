@@ -36,6 +36,10 @@ public class AuthController {
     private String googleRedirectUri;
 
     @Operation(summary = "소셜 로그인 화면으로 이동", description = "카카오 또는 구글 로그인 화면으로 리다이렉트합니다. provider에 kakao 또는 google을 입력하세요.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "302", description = "리다이렉트 성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "지원하지 않는 소셜 플랫폼 (OAUTH_PROVIDER_NOT_SUPPORTED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))
+    })
     @GetMapping("/oauth/{provider}")
     public void redirectToSocialLogin(
             @PathVariable String provider,
@@ -60,13 +64,18 @@ public class AuthController {
                     .queryParam("scope", "openid email profile")
                     .build().toUriString();
         } else {
-            throw new IllegalArgumentException("지원하지 않는 소셜 플랫폼입니다.");
+            throw new com.sangmyungyaho.barocare.global.exception.GlobalException(com.sangmyungyaho.barocare.global.exception.ErrorCode.OAUTH_PROVIDER_NOT_SUPPORTED);
         }
 
         response.sendRedirect(redirectUrl);
     }
 
     @Operation(summary = "소셜 로그인 콜백 처리", description = "카카오/구글 로그인 후 인가 코드를 받아 백엔드에서 토큰을 교환하고 프론트엔드로 리다이렉트합니다.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "302", description = "로그인 처리 및 리다이렉트 성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "지원하지 않는 소셜 플랫폼 (OAUTH_PROVIDER_NOT_SUPPORTED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "소셜 로그인 API 호출 실패 (OAUTH_API_FAILED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))
+    })
     @GetMapping("/oauth/{provider}/callback")
     public void loginCallback(
             @PathVariable String provider,
@@ -86,6 +95,10 @@ public class AuthController {
     }
 
     @Operation(summary = "로그아웃", description = "Redis에 저장된 Refresh Token을 삭제하여 로그아웃 처리합니다.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "로그아웃 성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 실패 (UNAUTHORIZED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))
+    })
     @PostMapping("/logout")
     public org.springframework.http.ResponseEntity<java.util.Map<String, String>> logout(@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         Long userId = Long.parseLong(userDetails.getUsername());

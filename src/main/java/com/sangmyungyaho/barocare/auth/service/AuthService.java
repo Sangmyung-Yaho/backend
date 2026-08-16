@@ -6,6 +6,8 @@ import com.sangmyungyaho.barocare.user.entity.Provider;
 import com.sangmyungyaho.barocare.user.entity.User;
 import com.sangmyungyaho.barocare.user.entity.UserStatus;
 import com.sangmyungyaho.barocare.user.repository.UserRepository;
+import com.sangmyungyaho.barocare.global.exception.ErrorCode;
+import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.global.security.entity.RefreshToken;
 import com.sangmyungyaho.barocare.global.security.jwt.JwtProvider;
 import com.sangmyungyaho.barocare.global.security.repository.RefreshTokenRepository;
@@ -33,7 +35,7 @@ public class AuthService {
             String googleIdToken = oAuth2ClientService.getGoogleIdToken(code);
             userInfo = oAuth2ClientService.getGoogleUserInfo(googleIdToken);
         } else {
-            throw new IllegalArgumentException("지원하지 않는 소셜 플랫폼입니다.");
+            throw new GlobalException(ErrorCode.OAUTH_PROVIDER_NOT_SUPPORTED);
         }
 
         boolean isNewUser = false;
