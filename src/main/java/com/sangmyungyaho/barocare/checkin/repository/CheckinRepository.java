@@ -20,4 +20,6 @@ public interface CheckinRepository extends JpaRepository<Checkin, Long> {
 
 	// 프론트 화면 연동: 기간별 체크인 조회(startDate~endDate 포함, 날짜 오름차순 — SkinAnalysis 히스토리와 동일한 정렬 관례).
 	List<Checkin> findAllByUserIdAndCheckedDateBetweenOrderByCheckedDateAsc(Long userId, LocalDate startDate, LocalDate endDate);
+
+	void deleteAllByUserId(Long userId);
 }

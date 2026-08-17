@@ -11,6 +11,12 @@ import com.sangmyungyaho.barocare.user.repository.UserRepository;
 import com.sangmyungyaho.barocare.global.security.repository.RefreshTokenRepository;
 import com.sangmyungyaho.barocare.user.dto.WithdrawRequestDto;
 import com.sangmyungyaho.barocare.user.entity.WithdrawalLog;
+import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
+import com.sangmyungyaho.barocare.routine.repository.RoutineRepository;
+import com.sangmyungyaho.barocare.skin.repository.SkinAnalysisRepository;
+import com.sangmyungyaho.barocare.skin.repository.SkinImageRepository;
+import com.sangmyungyaho.barocare.skin.repository.SkinComparisonRepository;
+import com.sangmyungyaho.barocare.report.repository.ReportRepository;
 import com.sangmyungyaho.barocare.user.repository.WithdrawalLogRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -23,6 +29,12 @@ public class UserService {
     private final UserRepository userRepository;
     private final WithdrawalLogRepository withdrawalLogRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final CheckinRepository checkinRepository;
+    private final RoutineRepository routineRepository;
+    private final SkinAnalysisRepository skinAnalysisRepository;
+    private final SkinImageRepository skinImageRepository;
+    private final SkinComparisonRepository skinComparisonRepository;
+    private final ReportRepository reportRepository;
 
     @Transactional(readOnly = true)
     public OnboardingStatusResponseDto getOnboardingStatus(Long userId) {
@@ -169,7 +181,15 @@ public class UserService {
         // SkinImage/SkinAnalysis 모두 userId를 보유하므로 조회 자체는 가능하다.
         // 여기서 ImageStorageService.delete(...) 호출을 통해 해당 유저의 이미지를 동기 삭제해야 한다.
 
-        // DB 유저 삭제 (CASCADE에 의해 하위 데이터 자동 삭제)
+        // 하위 데이터 명시 삭제 (JPA 연관관계 없이 Long userId로 연결되어 있어 수동 처리 필수)
+        reportRepository.deleteAllByCurrentSkinAnalysis_UserId(userId);
+        skinComparisonRepository.deleteAllByCurrentSkinAnalysis_UserId(userId);
+        skinImageRepository.deleteAllByUserId(userId);
+        skinAnalysisRepository.deleteAllByUserId(userId);
+        routineRepository.deleteAllByUserId(userId);
+        checkinRepository.deleteAllByUserId(userId);
+
+        // DB 유저 삭제
         userRepository.delete(user);
 
         // Redis Refresh Token 삭제 (로그아웃 효과)

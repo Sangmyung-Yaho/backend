@@ -4,6 +4,7 @@ import com.sangmyungyaho.barocare.global.security.handler.CustomAccessDeniedHand
 import com.sangmyungyaho.barocare.global.security.handler.CustomAuthenticationEntryPoint;
 import com.sangmyungyaho.barocare.global.security.jwt.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -23,6 +24,9 @@ import java.util.List;
 @EnableWebSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
+
+    @Value("${cors.frontend-origin:}")
+    private String frontendOrigin;
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final CustomAuthenticationEntryPoint customAuthenticationEntryPoint;
@@ -49,7 +53,7 @@ public class SecurityConfig {
                         // 스웨거 UI 및 API 문서화 경로는 항상 열어둠
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-resources/**").permitAll()
                         // 로그인, 회원가입 관련 API 및 기본 에러 처리는 누구나 접근 가능
-                        .requestMatchers("/api/v1/auth/**", "/error").permitAll()
+                        .requestMatchers("/api/v1/auth/oauth/**", "/error").permitAll()
                         // 그 외의 모든 요청은 인증 필요 (막아둠)
                         .anyRequest().authenticated()
                 )
@@ -73,7 +77,11 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(List.of("http://localhost:*", "http://127.0.0.1:*"));
+        List<String> origins = new java.util.ArrayList<>(List.of("http://localhost:*", "http://127.0.0.1:*"));
+        if (frontendOrigin != null && !frontendOrigin.isBlank()) {
+            origins.add(frontendOrigin);
+        }
+        configuration.setAllowedOriginPatterns(origins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(false);

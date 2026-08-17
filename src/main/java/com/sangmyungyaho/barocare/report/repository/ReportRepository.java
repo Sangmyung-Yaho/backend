@@ -31,4 +31,6 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 	// 홈 대시보드 통합 조회: 사용자의 가장 최근 "이미 저장된" 리포트 1건만 조회한다(find-or-create 아님,
 	// OpenAI 호출 없음). currentSkinAnalysis를 통해 userId로 조인한다(Report에는 userId 컬럼이 없음).
 	Optional<Report> findTopByCurrentSkinAnalysis_UserIdOrderByReportDateDescIdDesc(Long userId);
+
+	void deleteAllByCurrentSkinAnalysis_UserId(Long userId);
 }
