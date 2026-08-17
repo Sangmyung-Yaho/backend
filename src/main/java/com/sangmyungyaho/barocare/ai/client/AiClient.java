@@ -252,9 +252,9 @@ public class AiClient {
 
 	private String buildCauseAnalysisUserText(AiDto.SkinChangeInput skinChange, AiDto.CheckinInput checkin) {
 		return """
-				[피부 변화 결과 - 이미 계산된 값, 다시 계산하지 말 것]
-				- redness(붉은기) 변화량: %d, 상태: %s, 변화 방향: %s
-				- trouble(트러블) 변화량: %d, 상태: %s, 변화 방향: %s
+				[피부 변화 결과 - 이미 계산된 값, 다시 계산하지 말 것. 첫 피부 분석이라 비교 대상이 없으면 "정보 없음"으로 표시됨]
+				- redness(붉은기) 변화량: %s, 상태: %s, 변화 방향: %s
+				- trouble(트러블) 변화량: %s, 상태: %s, 변화 방향: %s
 				- baseline(최초 분석) 대비: %s (baseline 등급 참고용 - redness: %s, trouble: %s)
 
 				[생활습관 요인 판정 - 이미 계산된 값, 다시 계산하지 말 것. 판정 기준: %s]
@@ -267,8 +267,8 @@ public class AiClient {
 
 				위 데이터를 바탕으로 candidateFactors에 대한 원인 설명과 전체 요약을 작성해줘.
 				""".formatted(
-				skinChange.rednessChange(), skinChange.rednessStatus(), skinChange.rednessDirection(),
-				skinChange.troubleChange(), skinChange.troubleStatus(), skinChange.troubleDirection(),
+				formatNullable(skinChange.rednessChange()), formatNullable(skinChange.rednessStatus()), formatNullable(skinChange.rednessDirection()),
+				formatNullable(skinChange.troubleChange()), formatNullable(skinChange.troubleStatus()), formatNullable(skinChange.troubleDirection()),
 				skinChange.comparedAgainstBaseline() ? "직전 분석이 곧 baseline(두 번째 분석)" : "baseline은 직전 분석보다 더 이전 시점",
 				formatNullable(skinChange.baselineRednessLevel()), formatNullable(skinChange.baselineTroubleLevel()),
 				checkin.personalBaselineUsed() ? "개인 기준선(최근 7일 평균)" : "고정 기준표(체크인 이력 부족)",

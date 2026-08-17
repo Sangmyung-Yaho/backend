@@ -43,17 +43,23 @@ public class Routine {
 	@Column(name = "routine_date", nullable = false)
 	private LocalDate routineDate;
 
+	// 예상 소요시간(분). 화면(오늘 이렇게 해보세요)에서 "1분/2분" 같은 배지로 쓰인다. nullable로 두어
+	// 이 컬럼이 추가되기 전에 이미 생성된 과거 루틴 행과 충돌하지 않게 한다(과거 행은 null로 남는다).
+	@Column(name = "estimated_minutes")
+	private Integer estimatedMinutes;
+
 	@CreationTimestamp
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private LocalDateTime createdAt;
 
-	public Routine(Long userId, String category, String title, String intensity, LocalDate routineDate) {
+	public Routine(Long userId, String category, String title, String intensity, LocalDate routineDate, Integer estimatedMinutes) {
 		this.userId = userId;
 		this.category = category;
 		this.title = title;
 		this.intensity = intensity;
 		this.isCompleted = false;
 		this.routineDate = routineDate;
+		this.estimatedMinutes = estimatedMinutes;
 	}
 
 	public void complete() {

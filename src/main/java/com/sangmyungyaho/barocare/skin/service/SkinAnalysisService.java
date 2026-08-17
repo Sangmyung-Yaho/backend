@@ -2,10 +2,15 @@ package com.sangmyungyaho.barocare.skin.service;
 
 import com.sangmyungyaho.barocare.ai.client.AiClient;
 import com.sangmyungyaho.barocare.ai.dto.AiDto;
+import com.sangmyungyaho.barocare.checkin.entity.Checkin;
+import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.global.storage.ImageStorageService;
+import com.sangmyungyaho.barocare.report.entity.Report;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
+import com.sangmyungyaho.barocare.report.service.ReportService;
+import com.sangmyungyaho.barocare.routine.service.RoutineService;
 import com.sangmyungyaho.barocare.skin.dto.SkinAnalysisDto;
 import com.sangmyungyaho.barocare.skin.entity.ImageQualityRating;
 import com.sangmyungyaho.barocare.skin.entity.SkinAnalysis;
@@ -61,6 +66,9 @@ public class SkinAnalysisService {
 	private final AiClient aiClient;
 	private final SkinGradeRubric skinGradeRubric;
 	private final UserRepository userRepository;
+	private final CheckinRepository checkinRepository;
+	private final ReportService reportService;
+	private final RoutineService routineService;
 
 	public SkinAnalysisDto.Response analyzeSkin(Long userId, SkinAnalysisDto.Request request) {
 		log.info("피부 분석 요청 시작: skinImageId={}", request.skinImageId());
@@ -108,7 +116,41 @@ public class SkinAnalysisService {
 				SkinGradeRubric.RUBRIC_VERSION
 		);
 
-		return SkinAnalysisDto.Response.from(skinAnalysisRepository.save(skinAnalysis));
+		SkinAnalysis saved = skinAnalysisRepository.save(skinAnalysis);
+		SkinAnalysisDto.Response response = SkinAnalysisDto.Response.from(saved);
+
+		generateTodayReportAndRoutines(userId, saved);
+
+		return response;
+	}
+
+	/**
+	 * 실제 사용자 플로우(Figma 기준): 체크인 저장 → 사진 업로드 → 피부 분석 → 오늘 원인 리포트 생성 →
+	 * 오늘의 루틴 생성. 피부 분석이 방금 끝난 시점에만 오늘 Report/Routine을 생성한다(체크인 저장
+	 * 시점에는 더 이상 생성하지 않는다 - 그때는 아직 오늘 피부 분석이 없어 직전 데이터를 쓰게 되는
+	 * 문제가 있었다).
+	 *
+	 * 오늘 체크인이 아직 없으면(정상적인 플로우라면 체크인이 먼저 끝나 있어야 하지만, 순서를 어기고
+	 * 사진부터 분석을 시도한 경우) 리포트/루틴을 만들 수 없으므로 건너뛴다 - 피부 분석 저장 자체는
+	 * 이미 끝났으므로 이 응답에는 영향이 없다.
+	 *
+	 * 리포트/루틴 생성 중 예상치 못한 오류(OpenAI 실패 등)가 나도 피부 분석 저장 응답 자체는 항상
+	 * 성공해야 하므로 예외를 흡수한다(CheckinService가 루틴 생성 실패를 흡수하던 것과 동일한 방어 철학).
+	 */
+	private void generateTodayReportAndRoutines(Long userId, SkinAnalysis todaySkinAnalysis) {
+		Optional<Checkin> todayCheckin = checkinRepository.findByUserIdAndCheckedDate(userId, LocalDate.now());
+		if (todayCheckin.isEmpty()) {
+			log.info("오늘 체크인이 없어 오늘 리포트/루틴 생성을 건너뜀: userId={}, skinAnalysisId={}", userId, todaySkinAnalysis.getId());
+			return;
+		}
+
+		try {
+			Report report = reportService.generateTodayReport(userId, todaySkinAnalysis, todayCheckin.get());
+			routineService.generateRoutines(userId, todayCheckin.get(), todaySkinAnalysis, report);
+		} catch (RuntimeException e) {
+			log.warn("오늘 리포트/루틴 생성 실패(피부 분석 저장에는 영향 없음): userId={}, skinAnalysisId={}",
+					userId, todaySkinAnalysis.getId(), e);
+		}
 	}
 
 	/**
