@@ -22,4 +22,6 @@ public interface SkinAnalysisRepository extends JpaRepository<SkinAnalysis, Long
 	// 피부 분석 상세 조회(프론트 화면 연동): 특정 분석 기준으로 그 직전(바로 이전) 분석을 조회한다.
 	// findTop2ByUserIdOrderByAnalyzedAtDesc는 항상 "최신" 기준이라, 임의의(과거) 분석 기준으로는 쓸 수 없다.
 	Optional<SkinAnalysis> findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(Long userId, LocalDateTime analyzedAt);
+
+	void deleteAllByUserId(Long userId);
 }

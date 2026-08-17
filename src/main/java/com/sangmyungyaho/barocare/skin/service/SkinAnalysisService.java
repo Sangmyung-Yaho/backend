@@ -147,6 +147,11 @@ public class SkinAnalysisService {
 		try {
 			Report report = reportService.generateTodayReport(userId, todaySkinAnalysis, todayCheckin.get());
 			routineService.generateRoutines(userId, todayCheckin.get(), todaySkinAnalysis, report);
+
+			// 하루 활동 플로우 완료(체크인 → 피부 분석 → 리포트 → 루틴) → 스트릭 갱신
+			User user = userRepository.findById(userId)
+					.orElseThrow(() -> new GlobalException(ErrorCode.USER_NOT_FOUND));
+			user.recordActivity(LocalDate.now());
 		} catch (RuntimeException e) {
 			log.warn("오늘 리포트/루틴 생성 실패(피부 분석 저장에는 영향 없음): userId={}, skinAnalysisId={}",
 					userId, todaySkinAnalysis.getId(), e);

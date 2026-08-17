@@ -11,4 +11,6 @@ public interface SkinComparisonRepository extends JpaRepository<SkinComparison, 
 	Optional<SkinComparison> findByCurrentSkinAnalysis_IdAndPreviousSkinAnalysis_Id(
 			Long currentSkinAnalysisId, Long previousSkinAnalysisId
 	);
+
+	void deleteAllByCurrentSkinAnalysis_UserId(Long userId);
 }

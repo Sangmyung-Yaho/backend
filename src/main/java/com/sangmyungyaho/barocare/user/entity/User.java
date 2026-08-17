@@ -148,4 +148,15 @@ public class User extends BaseTimeEntity {
     public boolean hasAgreedToRequiredTerms() {
         return this.termsAgreed && this.privacyAgreed;
     }
+
+    public void recordActivity(LocalDate activityDate) {
+        if (this.lastActivityDate == null) {
+            this.currentStreak = 1;
+        } else if (activityDate.equals(this.lastActivityDate.plusDays(1))) {
+            this.currentStreak++;
+        } else if (!activityDate.equals(this.lastActivityDate)) {
+            this.currentStreak = 1;
+        }
+        this.lastActivityDate = activityDate;
+    }
 }

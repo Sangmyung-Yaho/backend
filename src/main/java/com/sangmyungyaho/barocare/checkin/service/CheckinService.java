@@ -27,6 +27,7 @@ public class CheckinService {
 
 	private final CheckinRepository checkinRepository;
 
+	@Transactional
 	public CheckinDto.Response createCheckin(Long userId, CheckinDto.Request request) {
 		LocalDate today = LocalDate.now();
 		if (checkinRepository.existsByUserIdAndCheckedDate(userId, today)) {
