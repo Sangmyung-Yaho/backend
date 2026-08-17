@@ -12,7 +12,8 @@ public class RoutineDto {
 			@JsonProperty("category") String category,
 			@JsonProperty("title") String title,
 			@JsonProperty("intensity") String intensity,
-			@JsonProperty("is_completed") boolean isCompleted
+			@JsonProperty("is_completed") boolean isCompleted,
+			@JsonProperty("estimated_minutes") Integer estimatedMinutes
 	) {
 		public static RoutineItem from(Routine routine) {
 			return new RoutineItem(
@@ -20,7 +21,8 @@ public class RoutineDto {
 					routine.getCategory(),
 					routine.getTitle(),
 					routine.getIntensity(),
-					routine.isCompleted()
+					routine.isCompleted(),
+					routine.getEstimatedMinutes()
 			);
 		}
 	}

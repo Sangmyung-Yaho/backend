@@ -2,9 +2,14 @@ package com.sangmyungyaho.barocare.skin.service;
 
 import com.sangmyungyaho.barocare.ai.client.AiClient;
 import com.sangmyungyaho.barocare.ai.dto.AiDto;
+import com.sangmyungyaho.barocare.checkin.entity.Checkin;
+import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.global.storage.ImageStorageService;
+import com.sangmyungyaho.barocare.report.entity.Report;
+import com.sangmyungyaho.barocare.report.service.ReportService;
+import com.sangmyungyaho.barocare.routine.service.RoutineService;
 import com.sangmyungyaho.barocare.skin.dto.SkinAnalysisDto;
 import com.sangmyungyaho.barocare.skin.entity.FaceRegion;
 import com.sangmyungyaho.barocare.skin.entity.ImageQualityRating;
@@ -32,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -66,6 +72,15 @@ class SkinAnalysisServiceTest {
 
 	@Mock
 	private UserRepository userRepository;
+
+	@Mock
+	private CheckinRepository checkinRepository;
+
+	@Mock
+	private ReportService reportService;
+
+	@Mock
+	private RoutineService routineService;
 
 	@InjectMocks
 	private SkinAnalysisService skinAnalysisService;
@@ -141,6 +156,8 @@ class SkinAnalysisServiceTest {
 		when(skinGradeRubric.calculateTroubleLevel(eq(aiResult.trouble()), any())).thenReturn(SkinAnalysisLevel.CAUTION);
 		when(skinGradeRubric.calculateSkinLevel(SkinAnalysisLevel.SAFE, SkinAnalysisLevel.CAUTION)).thenReturn(SkinAnalysisLevel.CAUTION);
 		when(skinAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+		// 오늘 체크인이 없는 상황(순서를 어기고 사진부터 분석) - 리포트/루틴 생성은 건너뛰어야 한다.
+		when(checkinRepository.findByUserIdAndCheckedDate(eq(USER_ID), any())).thenReturn(Optional.empty());
 
 		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
 		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(USER_ID, request);
@@ -150,6 +167,71 @@ class SkinAnalysisServiceTest {
 		assertThat(response.trouble()).isEqualTo(SkinAnalysisLevel.CAUTION);
 		assertThat(response.skinLevel()).isEqualTo(SkinAnalysisLevel.CAUTION);
 		verify(skinAnalysisRepository).save(any());
+		verifyNoInteractions(reportService, routineService);
+	}
+
+	@Test
+	void 오늘_체크인이_있으면_분석_저장_후_오늘_리포트와_루틴을_생성한다() {
+		// 요구사항 #6: Checkin -> SkinImage -> SkinAnalysis -> Report -> Routine 순서로, 피부 분석
+		// 완료 시점에 오늘 Report/Routine 생성까지 이어지는지 검증한다.
+		SkinImage myImage = new SkinImage(USER_ID, "http://example.com/mine.jpg", "mine.jpg");
+		ReflectionTestUtils.setField(myImage, "id", 55L);
+		when(skinImageRepository.findById(55L)).thenReturn(Optional.of(myImage));
+		when(imageStorageService.load("skin-images", "mine.jpg")).thenReturn(Optional.of(new byte[]{1, 2, 3}));
+
+		AiDto.SkinAnalysisResult aiResult = new AiDto.SkinAnalysisResult(
+				new AiDto.RednessObservation(List.of(), null),
+				new AiDto.TroubleObservation(List.of(), null),
+				new AiDto.ImageQuality(ImageQualityRating.GOOD, ImageQualityRating.GOOD, ImageQualityRating.GOOD, ImageQualityRating.GOOD)
+		);
+		when(aiClient.analyzeSkin(any(), any())).thenReturn(aiResult);
+		when(skinGradeRubric.calculateRednessLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinGradeRubric.calculateTroubleLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinGradeRubric.calculateSkinLevel(SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE)).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.now());
+		when(checkinRepository.findByUserIdAndCheckedDate(eq(USER_ID), any())).thenReturn(Optional.of(todayCheckin));
+		Report report = mock(Report.class);
+		when(reportService.generateTodayReport(eq(USER_ID), any(), eq(todayCheckin))).thenReturn(report);
+
+		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
+		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(USER_ID, request);
+
+		assertThat(response.skinImageId()).isEqualTo(myImage.getId());
+		verify(reportService).generateTodayReport(eq(USER_ID), any(), eq(todayCheckin));
+		verify(routineService).generateRoutines(eq(USER_ID), eq(todayCheckin), any(), eq(report));
+	}
+
+	@Test
+	void 오늘_리포트_루틴_생성이_실패해도_피부_분석_저장_응답은_영향받지_않는다() {
+		SkinImage myImage = new SkinImage(USER_ID, "http://example.com/mine.jpg", "mine.jpg");
+		ReflectionTestUtils.setField(myImage, "id", 55L);
+		when(skinImageRepository.findById(55L)).thenReturn(Optional.of(myImage));
+		when(imageStorageService.load("skin-images", "mine.jpg")).thenReturn(Optional.of(new byte[]{1, 2, 3}));
+
+		AiDto.SkinAnalysisResult aiResult = new AiDto.SkinAnalysisResult(
+				new AiDto.RednessObservation(List.of(), null),
+				new AiDto.TroubleObservation(List.of(), null),
+				new AiDto.ImageQuality(ImageQualityRating.GOOD, ImageQualityRating.GOOD, ImageQualityRating.GOOD, ImageQualityRating.GOOD)
+		);
+		when(aiClient.analyzeSkin(any(), any())).thenReturn(aiResult);
+		when(skinGradeRubric.calculateRednessLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinGradeRubric.calculateTroubleLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinGradeRubric.calculateSkinLevel(SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE)).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.now());
+		when(checkinRepository.findByUserIdAndCheckedDate(eq(USER_ID), any())).thenReturn(Optional.of(todayCheckin));
+		when(reportService.generateTodayReport(eq(USER_ID), any(), eq(todayCheckin)))
+				.thenThrow(new GlobalException(ErrorCode.AI_ANALYSIS_FAILED));
+
+		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
+		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(USER_ID, request);
+
+		assertThat(response).isNotNull();
+		assertThat(response.skinImageId()).isEqualTo(myImage.getId());
+		verify(routineService, never()).generateRoutines(any(), any(), any(), any());
 	}
 
 	@Test
