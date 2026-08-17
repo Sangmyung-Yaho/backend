@@ -49,3 +49,6 @@ out/
 .claude/
 CLAUDE.md
 .DS_Store
+
+### 로컬 API 검증용 프론트 (실제 서비스 코드 아님)
+/frontend-test/

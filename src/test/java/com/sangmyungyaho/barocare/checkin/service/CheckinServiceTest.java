@@ -5,7 +5,6 @@ import com.sangmyungyaho.barocare.checkin.entity.Checkin;
 import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
-import com.sangmyungyaho.barocare.routine.service.RoutineService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -13,21 +12,22 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 4 보완 #2: 체크인 저장과 루틴 생성(원인 분석/AI 호출 가능) 사이의 결합도 검증.
+ * 체크인 저장(오늘 전용) 단위 테스트.
  *
- * 핵심 요구사항: 루틴 생성(그 내부의 AI 원인 분석 호출)이 실패해도 체크인 저장 자체는 항상 성공해야 한다.
+ * 루틴/원인 리포트 생성은 더 이상 체크인 저장 시점에 일어나지 않는다(SkinAnalysisService.analyzeSkin()으로
+ * 트리거가 옮겨졌다 - RoutineServiceTest/SkinAnalysisServiceTest에서 별도 검증). checked_date도 더 이상
+ * 클라이언트가 지정할 수 없고 항상 서버 기준 오늘 날짜로 저장된다.
  */
 @ExtendWith(MockitoExtension.class)
 class CheckinServiceTest {
@@ -37,29 +37,26 @@ class CheckinServiceTest {
 	@Mock
 	private CheckinRepository checkinRepository;
 
-	@Mock
-	private RoutineService routineService;
-
 	@InjectMocks
 	private CheckinService checkinService;
 
 	@Test
-	void 정상_흐름에서는_체크인을_저장하고_루틴_생성을_호출한다() {
-		CheckinDto.Request request = new CheckinDto.Request(7.0, 2, 1500, LocalDate.of(2026, 8, 10));
-		when(checkinRepository.existsByUserIdAndCheckedDate(USER_ID, request.checkedDate())).thenReturn(false);
+	void 정상_흐름에서는_오늘_날짜로_체크인을_저장한다() {
+		CheckinDto.Request request = new CheckinDto.Request(7.0, 2, 1500);
+		when(checkinRepository.existsByUserIdAndCheckedDate(USER_ID, LocalDate.now())).thenReturn(false);
 		when(checkinRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
 		CheckinDto.Response response = checkinService.createCheckin(USER_ID, request);
 
 		assertThat(response.sleepHours()).isEqualTo(7.0);
+		assertThat(response.checkedDate()).isEqualTo(LocalDate.now());
 		verify(checkinRepository).save(any());
-		verify(routineService).generateRoutines(eq(USER_ID), any(Checkin.class));
 	}
 
 	@Test
-	void 이미_체크인이_있으면_저장과_루틴_생성_모두_호출하지_않고_예외를_던진다() {
-		CheckinDto.Request request = new CheckinDto.Request(7.0, 2, 1500, LocalDate.of(2026, 8, 10));
-		when(checkinRepository.existsByUserIdAndCheckedDate(USER_ID, request.checkedDate())).thenReturn(true);
+	void 오늘_이미_체크인이_있으면_저장하지_않고_예외를_던진다() {
+		CheckinDto.Request request = new CheckinDto.Request(7.0, 2, 1500);
+		when(checkinRepository.existsByUserIdAndCheckedDate(USER_ID, LocalDate.now())).thenReturn(true);
 
 		assertThatThrownBy(() -> checkinService.createCheckin(USER_ID, request))
 				.isInstanceOf(GlobalException.class)
@@ -67,37 +64,53 @@ class CheckinServiceTest {
 				.isEqualTo(ErrorCode.CHECKIN_ALREADY_EXISTS);
 
 		verify(checkinRepository, never()).save(any());
-		verify(routineService, never()).generateRoutines(anyLong(), any());
 	}
 
 	@Test
-	void 루틴_생성이_AI_분석_실패로_예외를_던져도_체크인_저장은_유지된다() {
-		// RoutineService는 이미 내부적으로 AI 관련 예외를 흡수하지만(GlobalException(AI_ANALYSIS_FAILED) 등),
-		// 여기서는 "혹시 그 방어선이 뚫리더라도" 체크인 저장 자체는 영향받지 않는지를 검증한다.
-		CheckinDto.Request request = new CheckinDto.Request(6.0, 3, 1000, LocalDate.of(2026, 8, 10));
-		when(checkinRepository.existsByUserIdAndCheckedDate(USER_ID, request.checkedDate())).thenReturn(false);
-		when(checkinRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-		doThrow(new GlobalException(ErrorCode.AI_ANALYSIS_FAILED))
-				.when(routineService).generateRoutines(eq(USER_ID), any(Checkin.class));
+	void 오늘의_체크인이_있으면_조회된다() {
+		Checkin todayCheckin = new Checkin(USER_ID, 7.5, 2, 1800, LocalDate.now());
+		when(checkinRepository.findByUserIdAndCheckedDate(USER_ID, LocalDate.now())).thenReturn(Optional.of(todayCheckin));
 
-		CheckinDto.Response response = checkinService.createCheckin(USER_ID, request);
+		CheckinDto.Response response = checkinService.getTodayCheckin(USER_ID);
 
-		assertThat(response).isNotNull();
-		assertThat(response.sleepHours()).isEqualTo(6.0);
-		verify(checkinRepository).save(any());
+		assertThat(response.sleepHours()).isEqualTo(7.5);
 	}
 
 	@Test
-	void 루틴_생성이_예상치_못한_런타임_예외를_던져도_체크인_저장은_유지된다() {
-		CheckinDto.Request request = new CheckinDto.Request(8.0, 1, 2000, LocalDate.of(2026, 8, 10));
-		when(checkinRepository.existsByUserIdAndCheckedDate(USER_ID, request.checkedDate())).thenReturn(false);
-		when(checkinRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-		doThrow(new IllegalStateException("예상치 못한 오류"))
-				.when(routineService).generateRoutines(eq(USER_ID), any(Checkin.class));
+	void 오늘의_체크인이_없으면_TODAY_CHECKIN_NOT_FOUND를_던진다() {
+		when(checkinRepository.findByUserIdAndCheckedDate(USER_ID, LocalDate.now())).thenReturn(Optional.empty());
 
-		CheckinDto.Response response = checkinService.createCheckin(USER_ID, request);
+		assertThatThrownBy(() -> checkinService.getTodayCheckin(USER_ID))
+				.isInstanceOf(GlobalException.class)
+				.extracting(e -> ((GlobalException) e).getErrorCode())
+				.isEqualTo(ErrorCode.TODAY_CHECKIN_NOT_FOUND);
+	}
 
-		assertThat(response).isNotNull();
-		verify(checkinRepository).save(any());
+	@Test
+	void 기간별_체크인은_날짜_오름차순으로_반환된다() {
+		LocalDate start = LocalDate.of(2026, 8, 10);
+		LocalDate end = LocalDate.of(2026, 8, 16);
+		Checkin earlier = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.of(2026, 8, 10));
+		Checkin later = new Checkin(USER_ID, 6.5, 3, 1400, LocalDate.of(2026, 8, 15));
+		when(checkinRepository.findAllByUserIdAndCheckedDateBetweenOrderByCheckedDateAsc(USER_ID, start, end))
+				.thenReturn(List.of(earlier, later));
+
+		List<CheckinDto.Response> response = checkinService.getCheckinsByDateRange(USER_ID, start, end);
+
+		assertThat(response).hasSize(2);
+		assertThat(response.get(0).checkedDate()).isEqualTo(LocalDate.of(2026, 8, 10));
+		assertThat(response.get(1).checkedDate()).isEqualTo(LocalDate.of(2026, 8, 15));
+	}
+
+	@Test
+	void 기간별_체크인_기록이_없으면_빈_배열을_반환한다() {
+		LocalDate start = LocalDate.of(2026, 8, 10);
+		LocalDate end = LocalDate.of(2026, 8, 16);
+		when(checkinRepository.findAllByUserIdAndCheckedDateBetweenOrderByCheckedDateAsc(USER_ID, start, end))
+				.thenReturn(List.of());
+
+		List<CheckinDto.Response> response = checkinService.getCheckinsByDateRange(USER_ID, start, end);
+
+		assertThat(response).isEmpty();
 	}
 }

@@ -81,7 +81,7 @@ class ReportRepositoryTest {
 	}
 
 	private Report persistReport(LocalDate reportDate) {
-		SkinImage skinImage = entityManager.persist(new SkinImage("https://example.com/a.jpg", "stored-a.jpg"));
+		SkinImage skinImage = entityManager.persist(new SkinImage(1L, "https://example.com/a.jpg", "stored-a.jpg"));
 		SkinAnalysis previous = entityManager.persist(skinAnalysisOf(skinImage, SkinAnalysisLevel.CAUTION));
 		SkinAnalysis current = entityManager.persist(skinAnalysisOf(skinImage, SkinAnalysisLevel.SAFE));
 
@@ -96,7 +96,7 @@ class ReportRepositoryTest {
 
 	private SkinAnalysis skinAnalysisOf(SkinImage skinImage, SkinAnalysisLevel skinLevel) {
 		return new SkinAnalysis(
-				skinImage,
+				1L, skinImage,
 				skinLevel, List.of(), null,
 				skinLevel, List.of(), null,
 				skinLevel,

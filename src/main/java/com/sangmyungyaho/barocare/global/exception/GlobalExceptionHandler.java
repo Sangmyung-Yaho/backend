@@ -6,6 +6,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
@@ -33,6 +34,15 @@ public class GlobalExceptionHandler {
 	// 필수 요청 파라미터가 아예 누락된 경우 (일반 @RequestParam)
 	@ExceptionHandler(MissingServletRequestParameterException.class)
 	public ResponseEntity<ErrorResponse> handleMissingParameterException(MissingServletRequestParameterException e) {
+		return ResponseEntity.status(ErrorCode.BAD_REQUEST.getStatus())
+				.body(ErrorResponse.of(ErrorCode.BAD_REQUEST));
+	}
+
+	// 요청 파라미터는 있으나 타입 변환에 실패한 경우 (예: startDate=2026-08-9 처럼 LocalDate로
+	// 파싱할 수 없는 날짜 형식). 이 핸들러가 없으면 Spring 기본 에러 처리로 넘어가 원시 스택 트레이스가
+	// 응답 바디에 그대로 노출된다.
+	@ExceptionHandler(MethodArgumentTypeMismatchException.class)
+	public ResponseEntity<ErrorResponse> handleMethodArgumentTypeMismatchException(MethodArgumentTypeMismatchException e) {
 		return ResponseEntity.status(ErrorCode.BAD_REQUEST.getStatus())
 				.body(ErrorResponse.of(ErrorCode.BAD_REQUEST));
 	}

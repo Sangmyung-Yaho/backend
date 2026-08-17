@@ -74,8 +74,8 @@ class HomeServiceTest {
 		when(skinAnalysisService.getLatestDetailForUser(USER_ID)).thenReturn(Optional.of(skinDetail));
 
 		ReportDto.Response reportResponse = new ReportDto.Response(
-				101L, LocalDate.of(2026, 8, 12), null,
-				List.of(new ReportDto.PrimaryCause(ReportCauseFactor.SLEEP, "수면 부족", 5.0, "시간", "설명")),
+				101L, LocalDate.of(2026, 8, 12), null, true,
+				List.of(new ReportDto.PrimaryCause(ReportCauseFactor.SLEEP, "수면 부족", 5.0, "시간", "설명", null, null, null)),
 				"요약"
 		);
 		when(reportService.getLatestSavedReport(USER_ID)).thenReturn(Optional.of(reportResponse));
@@ -99,7 +99,7 @@ class HomeServiceTest {
 		LocalDate today = LocalDate.now();
 		when(checkinService.getCheckinsByDateRange(eq(USER_ID), any(), any())).thenReturn(List.of());
 		when(skinAnalysisService.getLatestDetailForUser(USER_ID)).thenReturn(Optional.empty()); // 피부 분석 없음
-		ReportDto.Response reportResponse = new ReportDto.Response(101L, today, null, List.of(), "요약");
+		ReportDto.Response reportResponse = new ReportDto.Response(101L, today, null, true, List.of(), "요약");
 		when(reportService.getLatestSavedReport(USER_ID)).thenReturn(Optional.of(reportResponse)); // 리포트는 있음
 		when(routineService.getTodayRoutines(USER_ID)).thenReturn(
 				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of()));

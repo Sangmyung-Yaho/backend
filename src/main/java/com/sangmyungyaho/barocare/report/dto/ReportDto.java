@@ -1,6 +1,7 @@
 package com.sangmyungyaho.barocare.report.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.sangmyungyaho.barocare.report.entity.BaselineType;
 import com.sangmyungyaho.barocare.report.entity.Report;
 import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
@@ -72,8 +73,10 @@ public class ReportDto {
 			ReportChangeStatus status
 	) {
 
+		// previousScore가 null이면(비교할 이전 분석이 없는 첫 피부 분석) change도 계산할 수 없으므로 null이다.
 		public static SkinChangeItem of(Integer previousScore, Integer currentScore, ReportChangeStatus status) {
-			return new SkinChangeItem(previousScore, currentScore, currentScore - previousScore, status);
+			Integer change = previousScore != null ? currentScore - previousScore : null;
+			return new SkinChangeItem(previousScore, currentScore, change, status);
 		}
 	}
 
@@ -100,7 +103,26 @@ public class ReportDto {
 			String unit,
 
 			@Schema(description = "원인 후보에 대한 자연어 설명", example = "최근 평균보다 수면 시간이 부족했어요.")
-			String description
+			String description,
+
+			@Schema(
+					description = "비교 기준값. baseline_type이 PERSONAL_AVERAGE면 최근 개인 평균(최근 7일), "
+							+ "RECOMMENDED면 고정 권장값(수면 7시간/스트레스 3단계/목표 음수량)이다. current_value와 같은 단위다.",
+					example = "6.8"
+			)
+			@JsonProperty("baseline_value")
+			Double baselineValue,
+
+			@Schema(
+					description = "current_value - baseline_value. 수면/수분은 음수가 나쁨(기준보다 부족), "
+							+ "스트레스는 양수가 나쁨(기준보다 높음)을 뜻한다.",
+					example = "-1.6"
+			)
+			Double difference,
+
+			@Schema(description = "baseline_value의 기준 종류", example = "PERSONAL_AVERAGE")
+			@JsonProperty("baseline_type")
+			BaselineType baselineType
 	) {
 	}
 
@@ -136,9 +158,16 @@ public class ReportDto {
 			@JsonProperty("report_date")
 			LocalDate reportDate,
 
-			@Schema(description = "붉은기/트러블 지표 변화")
+			@Schema(description = "붉은기/트러블 지표 변화. has_previous_analysis가 false(첫 피부 분석)면 "
+					+ "previous_score/change/status가 모두 null이다.")
 			@JsonProperty("skin_change")
 			SkinChange skinChange,
+
+			@Schema(description = "비교 가능한 이전 피부 분석이 있었는지 여부. false면 첫 피부 분석이라 "
+					+ "skin_change의 변화량을 계산할 수 없었다는 뜻이다(오류 아님) - 프론트는 이 값이 false일 때 "
+					+ "\"최근 피부 지표 추이\" 영역을 데이터 부족 안내로 표시하면 된다.", example = "true")
+			@JsonProperty("has_previous_analysis")
+			boolean hasPreviousAnalysis,
 
 			@Schema(description = "피부 변화의 주요 원인 후보 목록")
 			@JsonProperty("primary_causes")
@@ -153,7 +182,8 @@ public class ReportDto {
 					SkinChangeItem.of(report.getRednessPreviousScore(), report.getRednessCurrentScore(), report.getRednessStatus()),
 					SkinChangeItem.of(report.getTroublePreviousScore(), report.getTroubleCurrentScore(), report.getTroubleStatus())
 			);
-			return new Response(report.getId(), report.getReportDate(), skinChange, primaryCauses, report.getSummary());
+			boolean hasPreviousAnalysis = report.getPreviousSkinAnalysis() != null;
+			return new Response(report.getId(), report.getReportDate(), skinChange, hasPreviousAnalysis, primaryCauses, report.getSummary());
 		}
 	}
 
@@ -182,18 +212,47 @@ public class ReportDto {
 	) {
 	}
 
+	@Schema(name = "ReportWarningFactorValueResponse")
+	public record WarningFactorValue(
+			@Schema(description = "원인 요인", example = "SLEEP")
+			ReportCauseFactor factor,
+
+			@Schema(description = "해당 요인의 실제 체크인 값(경고를 발생시킨 감지 근거)", example = "2.8")
+			@JsonProperty("current_value")
+			Double currentValue,
+
+			@Schema(description = "current_value의 단위", example = "시간")
+			String unit
+	) {
+	}
+
 	@Schema(name = "ReportCauseWarningResponse")
 	public record Warning(
-			@Schema(description = "경고 위험도", example = "HIGH")
+			@Schema(
+					description = "경고 위험도. 이 엔드포인트는 3요인(수면+스트레스+수분)이 모두 확인된 고위험 조합만 "
+							+ "반환하도록 분기되어 있어 항상 HIGH다 - 2요인 조합은 여기 노출되지 않고 "
+							+ "GET .../interactions에서만(경고가 아닌 상호작용으로) 노출된다.",
+					example = "HIGH"
+			)
 			WarningLevel level,
 
-			@Schema(description = "이 경고를 발생시킨 원인 요인 조합", example = "[\"SLEEP\", \"STRESS\"]")
+			@Schema(description = "이 경고를 발생시킨 원인 요인 조합", example = "[\"SLEEP\", \"STRESS\", \"WATER_INTAKE\"]")
 			List<ReportCauseFactor> factors,
 
-			@Schema(description = "경고 카드 제목", example = "고위험 조합 감지")
+			@Schema(description = "각 원인 요인의 실제 체크인 값(구조화). \"수면 2.8시간\" 같은 감지 근거를 프론트가 별도 조회 없이 표시할 수 있다.")
+			@JsonProperty("factor_values")
+			List<WarningFactorValue> factorValues,
+
+			@Schema(description = "경고 카드 제목(카테고리 라벨)", example = "고위험 조합 감지")
 			String title,
 
-			@Schema(description = "경고 카드 본문", example = "수면 부족과 높은 스트레스가 함께 확인됐어요.")
+			@Schema(
+					description = "행동을 유도하는 헤드라인 카피. 프론트가 하드코딩하지 않고 그대로 표시할 수 있도록 서버가 제공한다.",
+					example = "오늘은 몸을 쉬게 해주세요."
+			)
+			String headline,
+
+			@Schema(description = "경고 카드 본문(사실 서술)", example = "수면 부족, 높은 스트레스, 수분 섭취 부족이 함께 확인됐어요.")
 			String message
 	) {
 	}

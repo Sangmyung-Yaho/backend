@@ -108,4 +108,14 @@ class CheckinControllerTest {
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.error.code").value("BAD_REQUEST"));
 	}
+
+	@Test
+	void 기간별_체크인_날짜_형식이_올바르지_않으면_스택트레이스_노출없이_400을_반환한다() throws Exception {
+		mockMvc.perform(get("/api/v1/checkins")
+						.param("startDate", "2026-08-9")
+						.param("endDate", "2026-08-16"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.error.code").value("BAD_REQUEST"))
+				.andExpect(jsonPath("$.trace").doesNotExist());
+	}
 }

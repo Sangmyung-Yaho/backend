@@ -32,16 +32,13 @@ public class CheckinDto {
 			@NotNull(message = "수분 섭취량은 필수입니다.")
 			@PositiveOrZero(message = "수분 섭취량은 음수일 수 없습니다.")
 			@JsonProperty("water_intake_ml")
-			Integer waterIntakeMl,
-
-			@Schema(description = "체크인 날짜", example = "2026-08-09")
-			@NotNull(message = "체크인 날짜는 필수입니다.")
-			@JsonProperty("checked_date")
-			LocalDate checkedDate
+			Integer waterIntakeMl
 	) {
 
+		// 체크인은 항상 "오늘"만 저장한다(운영 API는 오늘 체크인 전용) - 클라이언트가 날짜를 지정할 수 없다.
+		// 과거 날짜 체크인이 필요한 테스트(개인기준선 등)는 이 API를 거치지 않고 Repository를 직접 사용해야 한다.
 		public Checkin toEntity(Long userId) {
-			return new Checkin(userId, sleepHours, stressLevel, waterIntakeMl, checkedDate);
+			return new Checkin(userId, sleepHours, stressLevel, waterIntakeMl, LocalDate.now());
 		}
 	}
 
