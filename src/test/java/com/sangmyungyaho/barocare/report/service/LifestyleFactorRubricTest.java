@@ -1,6 +1,7 @@
 package com.sangmyungyaho.barocare.report.service;
 
 import com.sangmyungyaho.barocare.checkin.entity.Checkin;
+import com.sangmyungyaho.barocare.report.entity.BaselineType;
 import com.sangmyungyaho.barocare.report.entity.LifestyleFactorLevel;
 import org.junit.jupiter.api.Test;
 
@@ -33,6 +34,17 @@ class LifestyleFactorRubricTest {
 		assertThat(judgment.sleepLevel()).isEqualTo(LifestyleFactorLevel.MODERATE);
 		assertThat(judgment.stressLevel()).isEqualTo(LifestyleFactorLevel.MODERATE);
 		assertThat(judgment.waterLevel()).isEqualTo(LifestyleFactorLevel.MODERATE);
+
+		// 고정 기준표(RECOMMENDED) 모드에서는 baseline_value가 권장값(수면 7h/스트레스 3단계/목표 음수량)이다.
+		assertThat(judgment.sleep().baselineType()).isEqualTo(BaselineType.RECOMMENDED);
+		assertThat(judgment.sleep().baselineValue()).isEqualTo(7.0);
+		assertThat(judgment.sleep().difference()).isEqualTo(-0.5); // 6.5 - 7.0
+		assertThat(judgment.stress().baselineType()).isEqualTo(BaselineType.RECOMMENDED);
+		assertThat(judgment.stress().baselineValue()).isEqualTo(3.0);
+		assertThat(judgment.stress().difference()).isEqualTo(0.0); // 3 - 3
+		assertThat(judgment.water().baselineType()).isEqualTo(BaselineType.RECOMMENDED);
+		assertThat(judgment.water().baselineValue()).isEqualTo(2000.0); // waterGoalMl 자체
+		assertThat(judgment.water().difference()).isEqualTo(-800.0); // 1200 - 2000
 	}
 
 	@Test
@@ -46,6 +58,18 @@ class LifestyleFactorRubricTest {
 		assertThat(judgment.sleepLevel()).isEqualTo(LifestyleFactorLevel.POOR); // 7.0 -> 5.0, diff=-2.0 <= -1.0
 		assertThat(judgment.stressLevel()).isEqualTo(LifestyleFactorLevel.POOR); // 2 -> 4, diff=2.0 >= 1.0
 		assertThat(judgment.waterLevel()).isEqualTo(LifestyleFactorLevel.POOR); // 100% -> 40%, diff=-0.6 <= -0.2
+
+		// 개인 기준선(PERSONAL_AVERAGE) 모드에서는 baseline_value가 최근 7일 개인 평균이다.
+		assertThat(judgment.sleep().baselineType()).isEqualTo(BaselineType.PERSONAL_AVERAGE);
+		assertThat(judgment.sleep().baselineValue()).isEqualTo(7.0);
+		assertThat(judgment.sleep().difference()).isEqualTo(-2.0);
+		assertThat(judgment.stress().baselineType()).isEqualTo(BaselineType.PERSONAL_AVERAGE);
+		assertThat(judgment.stress().baselineValue()).isEqualTo(2.0);
+		assertThat(judgment.stress().difference()).isEqualTo(2.0);
+		// 수분은 판정 자체는 비율 기준이지만, baseline_value/difference는 current_value(ml)와 같은 단위로 환산해서 담는다.
+		assertThat(judgment.water().baselineType()).isEqualTo(BaselineType.PERSONAL_AVERAGE);
+		assertThat(judgment.water().baselineValue()).isEqualTo(2000.0); // 개인 평균 섭취량(ml)
+		assertThat(judgment.water().difference()).isEqualTo(-1200.0); // 800 - 2000
 	}
 
 	@Test

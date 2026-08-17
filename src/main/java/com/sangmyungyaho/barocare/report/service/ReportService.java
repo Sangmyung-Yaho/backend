@@ -37,35 +37,35 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 피부 변화 원인 분석 리포트(REP-101, GET /api/v1/reports/skin/latest 및 ISSUE-28 파생 API들).
+ * 피부 변화 원인 분석 리포트.
  *
- * 최신 SkinAnalysis를 기준으로 find-or-create 방식으로 동작한다: 이미 해당 SkinAnalysis로 생성된
- * Report가 있으면 재사용하고, 없을 때만 AiClient(원인 해석)를 호출해 새로 계산/저장한다. 따라서 같은
- * 최신 SkinAnalysis에 대한 반복 GET은 OpenAI를 다시 호출하지 않는다.
+ * 생성과 조회의 책임을 분리한다:
+ * - 생성은 {@link #generateTodayReport}만 담당하며, 오직
+ *   {@link com.sangmyungyaho.barocare.skin.service.SkinAnalysisService#analyzeSkin}(피부 분석 완료 시점)에서만
+ *   호출된다. GET 계열 API는 이 메서드를 호출하지 않으므로 조회만으로는 OpenAI가 호출되거나 Report가 새로
+ *   생성되지 않는다("조회와 생성의 책임 분리").
+ * - 조회({@link #getLatestSkinReport}, {@link #getLatestSavedReport}, {@link #getReports}, {@link #getReport} 등)는
+ *   전부 이미 저장된 Report만 읽는다(find-or-create 없음).
  *
  * redness/trouble의 score(SkinAnalysisLevel ordinal)와 status(IMPROVED/WORSENED/UNCHANGED)는
  * 둘 다 이 서비스가 change 값 하나로 계산한다 - AI(SkinComparisonService의 이미지 비교 판단)에 기대지
- * 않으므로 score와 status가 서로 다른 기준으로 어긋날 수 없다. status가 공식 판정이고, direction
- * (INCREASED/STABLE/DECREASED, baseline 참고 정보 포함)은 GPT에게 주는 보조 컨텍스트다 - 이미 있는
- * SkinComparison을 재사용하거나 status로부터 결정적으로 유도하며, 새로 AI를 호출하지 않는다.
+ * 않으므로 score와 status가 서로 다른 기준으로 어긋날 수 없다. 사용자의 첫 피부 분석처럼 비교할 이전
+ * 분석이 없으면 previousScore/status는 null이다(ReportDto.Response.hasPreviousAnalysis=false로 노출).
  *
  * 생활습관 요인(수면/스트레스/수분)도 마찬가지로 LifestyleFactorRubric이 먼저 GOOD/MODERATE/POOR로
- * 판정하고, POOR인 요인만 "주요 위험 요인 후보"로 확정해 GPT에 전달한다. GPT(AiClient)는 이 후보에
- * 대한 원인 설명/자연어 요약 생성만 담당하며, 후보 밖 요인을 causes에 넣어 반환하더라도 이 서비스가
- * candidateFactors 기준으로 다시 걸러내 최종 응답에는 절대 남지 않는다(GPT가 백엔드 판정을 뒤집거나
- * 임의로 원인을 추가하지 못하도록 하는 코드 레벨 강제).
- *
- * ISSUE-28(복합 원인 분석 및 피부 변화 설명): getLatestSkinReport()가 내부적으로 의존하는
- * find-or-create 로직(getOrCreateLatestReport)을 공유해, 여러 API가 같은 최신 Report를 새로
- * 계산하지 않고 재사용하도록 한다. 이번 이슈에서는 userId 기반 사용자별 데이터 분리를 다루지
- * 않는다(기존 Checkin/SkinAnalysis와 동일하게 전역 최신값 기준으로 조회) - 관련 TODO는
- * Checkin/SkinAnalysis 엔티티에 그대로 남겨둔다.
+ * 판정하고, POOR인 요인만 "주요 위험 요인 후보"로 확정해 GPT에 전달한다. 이 판정은 체크인 이력만으로
+ * 이루어지므로 피부 분석이 몇 회차인지와 무관하게(첫 분석이어도) 항상 계산 가능하다. GPT(AiClient)는 이
+ * 후보에 대한 원인 설명/자연어 요약 생성만 담당하며, 후보 밖 요인을 causes에 넣어 반환하더라도 이
+ * 서비스가 candidateFactors 기준으로 다시 걸러내 최종 응답에는 절대 남지 않는다.
  */
 @Service
 @RequiredArgsConstructor
 public class ReportService {
 
 	private static final Logger log = LoggerFactory.getLogger(ReportService.class);
+
+	// 분석 메인 화면(GET /api/v1/reports) - date/startDate/endDate가 전부 없을 때 기본으로 조회하는 기간.
+	private static final int DEFAULT_REPORT_LIST_DAYS = 30;
 
 	private final SkinAnalysisRepository skinAnalysisRepository;
 	private final CheckinRepository checkinRepository;
@@ -81,31 +81,163 @@ public class ReportService {
 	// 여기서는 "같은 순간에 들어온 요청이 OpenAI를 중복 호출하지 않도록" 최소화하는 목적만 가진다.
 	private final Map<Long, Object> reportCreationLocks = new ConcurrentHashMap<>();
 
-	public ReportDto.Response getLatestSkinReport(Long userId) {
-		Report report = getOrCreateLatestReport(userId);
-		return ReportDto.Response.of(report, parsePrimaryCauses(report.getPrimaryCausesJson()));
+	/**
+	 * 오늘 원인 리포트 생성(유일한 생성 경로).
+	 *
+	 * {@link com.sangmyungyaho.barocare.skin.service.SkinAnalysisService#analyzeSkin}이 오늘 SkinAnalysis를
+	 * 저장한 직후에만 호출한다 - "오늘 Checkin + 오늘 SkinAnalysis + 직전 SkinAnalysis(있는 경우) + 과거
+	 * Checkin baseline"을 조합해 리포트를 만든다. 직전 SkinAnalysis가 없으면(사용자의 첫 분석) 피부 변화
+	 * 비교값은 모두 null로 채우고, 원인 판정(체크인 기반)은 그대로 진행한다 - 오류로 취급하지 않는다.
+	 *
+	 * 같은 todaySkinAnalysis에 대해 이미 리포트가 있으면(currentSkinAnalysis 유니크 제약) 재사용하고
+	 * OpenAI를 재호출하지 않는다.
+	 *
+	 * @throws GlobalException AI_ANALYSIS_FAILED - OpenAI 호출/응답 검증 실패 시
+	 */
+	public Report generateTodayReport(Long userId, SkinAnalysis todaySkinAnalysis, Checkin todayCheckin) {
+		Object lock = reportCreationLocks.computeIfAbsent(todaySkinAnalysis.getId(), id -> new Object());
+		synchronized (lock) {
+			Optional<Report> existing = reportRepository.findByCurrentSkinAnalysis_Id(todaySkinAnalysis.getId());
+			if (existing.isPresent()) {
+				log.info("이미 생성된 오늘 리포트를 재사용(OpenAI 재호출 없음): reportId={}, skinAnalysisId={}",
+						existing.get().getId(), todaySkinAnalysis.getId());
+				return existing.get();
+			}
+
+			Optional<SkinAnalysis> previousOpt = skinAnalysisRepository
+					.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(userId, todaySkinAnalysis.getAnalyzedAt());
+
+			int rednessCurrentScore = todaySkinAnalysis.getRednessLevel().ordinal();
+			int troubleCurrentScore = todaySkinAnalysis.getTroubleLevel().ordinal();
+
+			Integer rednessPreviousScore = null;
+			Integer troublePreviousScore = null;
+			ReportChangeStatus rednessStatus = null;
+			ReportChangeStatus troubleStatus = null;
+			ChangeDirection rednessDirection = null;
+			ChangeDirection troubleDirection = null;
+			Integer rednessChange = null;
+			Integer troubleChange = null;
+			boolean comparedAgainstBaseline = false;
+			SkinAnalysisLevel baselineRednessLevel = null;
+			SkinAnalysisLevel baselineTroubleLevel = null;
+
+			if (previousOpt.isPresent()) {
+				SkinAnalysis previous = previousOpt.get();
+				rednessPreviousScore = previous.getRednessLevel().ordinal();
+				troublePreviousScore = previous.getTroubleLevel().ordinal();
+				rednessChange = rednessCurrentScore - rednessPreviousScore;
+				troubleChange = troubleCurrentScore - troublePreviousScore;
+				rednessStatus = toReportChangeStatus(rednessChange);
+				troubleStatus = toReportChangeStatus(troubleChange);
+
+				log.info("리포트 점수 계산: redness {}→{}(change={}, {}), trouble {}→{}(change={}, {})",
+						rednessPreviousScore, rednessCurrentScore, rednessChange, rednessStatus,
+						troublePreviousScore, troubleCurrentScore, troubleChange, troubleStatus);
+
+				// 피부 변화 비교: 직전 분석 대비 증가/유지/감소. 이미 계산된 SkinComparison(AI 이미지 비교,
+				// POST /api/v1/skin-comparisons로 별도 생성됨)이 있으면 재사용하고, 없으면 위에서 계산한
+				// status로부터 결정적으로 유도한다(GPT 재호출 없음).
+				ReportChangeStatus finalRednessStatus = rednessStatus;
+				ReportChangeStatus finalTroubleStatus = troubleStatus;
+				Optional<SkinComparison> comparison = skinComparisonRepository
+						.findByCurrentSkinAnalysis_IdAndPreviousSkinAnalysis_Id(todaySkinAnalysis.getId(), previous.getId());
+				rednessDirection = comparison.map(SkinComparison::getRednessChange)
+						.orElseGet(() -> toChangeDirection(finalRednessStatus));
+				troubleDirection = comparison.map(SkinComparison::getTroubleChange)
+						.orElseGet(() -> toChangeDirection(finalTroubleStatus));
+
+				// baseline(최초 분석) 참조: previous가 곧 baseline이면(사용자의 두 번째 분석) true.
+				Optional<SkinAnalysis> baseline = skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(userId);
+				comparedAgainstBaseline = baseline.map(SkinAnalysis::getId).map(id -> id.equals(previous.getId())).orElse(false);
+				if (!comparedAgainstBaseline) {
+					baselineRednessLevel = baseline.map(SkinAnalysis::getRednessLevel).orElse(null);
+					baselineTroubleLevel = baseline.map(SkinAnalysis::getTroubleLevel).orElse(null);
+				}
+			} else {
+				log.info("직전 SkinAnalysis가 없어(첫 피부 분석) 변화 비교 없이 리포트를 생성함: userId={}, skinAnalysisId={}",
+						userId, todaySkinAnalysis.getId());
+			}
+
+			LocalDate referenceDate = todaySkinAnalysis.getAnalyzedAt().toLocalDate();
+			List<Checkin> previousCheckins = checkinRepository
+					.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(userId, referenceDate);
+
+			// 목표 음수량 반영: 온보딩/프로필에서 계산·저장된 User.waterGoalMl을 조회해 수분 판정에 사용한다.
+			Integer waterGoalMl = userRepository.findById(userId).map(User::getWaterGoalMl).orElse(null);
+			// 생활습관 요인판정: GPT에 raw 수치만 넘기지 않고, 먼저 백엔드가 GOOD/MODERATE/POOR로 판정한다.
+			// 과거 체크인이 7건 미만이면 고정 기준표, 7건 이상이면 개인 기준선을 쓴다(LifestyleFactorRubric 내부 판단).
+			LifestyleFactorRubric.Judgment judgment = lifestyleFactorRubric.judge(todayCheckin, previousCheckins, waterGoalMl);
+			// 주요 위험 요인 후보: POOR로 판정된 요인만 백엔드가 후보로 확정한다. GPT는 causes를
+			// 이 후보에 대해서만 작성해야 하고, 아래에서 이 목록 기준으로 한 번 더 걸러 코드 레벨로 강제한다.
+			List<ReportCauseFactor> candidateFactors = resolveCandidateFactors(judgment);
+
+			AiDto.SkinChangeInput skinChangeInput = new AiDto.SkinChangeInput(
+					rednessChange, rednessStatus, rednessDirection,
+					troubleChange, troubleStatus, troubleDirection,
+					comparedAgainstBaseline, baselineRednessLevel, baselineTroubleLevel
+			);
+			AiDto.CheckinInput checkinInput = buildCheckinInput(todayCheckin, previousCheckins, judgment, candidateFactors);
+
+			log.info("OpenAI 원인 분석 요청 시작: skinAnalysisId={}, candidateFactors={}", todaySkinAnalysis.getId(), candidateFactors);
+			AiDto.CauseAnalysisResult causeAnalysisResult = aiClient.analyzeSkinChangeCauses(skinChangeInput, checkinInput);
+			validateCauseAnalysisResult(causeAnalysisResult);
+
+			List<ReportDto.PrimaryCause> primaryCauses = causeAnalysisResult.causes().stream()
+					.filter(cause -> {
+						boolean isCandidate = candidateFactors.contains(cause.factor());
+						if (!isCandidate) {
+							log.warn("AI가 후보 목록 밖의 요인을 반환해 제외함: factor={}, candidateFactors={}",
+									cause.factor(), candidateFactors);
+						}
+						return isCandidate;
+					})
+					.map(cause -> enrichCause(cause, todayCheckin, judgment))
+					.toList();
+
+			Report report = new Report(
+					todaySkinAnalysis, previousOpt.orElse(null), referenceDate,
+					rednessPreviousScore, rednessCurrentScore, rednessStatus,
+					troublePreviousScore, troubleCurrentScore, troubleStatus,
+					toJson(primaryCauses), causeAnalysisResult.summary()
+			);
+
+			try {
+				Report saved = reportRepository.save(report);
+				log.info("리포트 저장 완료: reportId={}, skinAnalysisId={}", saved.getId(), todaySkinAnalysis.getId());
+				return saved;
+			} catch (DataIntegrityViolationException e) {
+				// 락으로 막지 못한 경합(예: 다중 인스턴스 배포)에 대한 최종 안전장치.
+				log.warn("리포트 저장 중 unique 제약 충돌 - 동시 요청으로 이미 생성된 리포트를 재사용: skinAnalysisId={}", todaySkinAnalysis.getId());
+				return reportRepository.findByCurrentSkinAnalysis_Id(todaySkinAnalysis.getId()).orElseThrow(() -> e);
+			}
+		}
 	}
 
 	/**
-	 * 개인화 피부 원인 분석(케어/루틴 연동용): getLatestSkinReport()와 동일하지만, 리포트를 아직 만들 수
-	 * 없는 상황(피부 분석 부족/체크인 없음/AI 분석 실패 등)을 예외로 전파하지 않고 빈 값으로 돌려준다.
-	 * RoutineService처럼 "있으면 참고하고, 없으면 폴백"해야 하는 호출부가 항상 안전하게 쓸 수 있도록 한다 -
-	 * 이 메서드 자체는 새로운 데이터 부족 fallback을 만들지 않고, 이미 존재하는 getLatestSkinReport()의
-	 * 예외를 흡수만 한다.
+	 * 최신 원인 리포트 조회(순수 조회, OpenAI 호출 없음). 저장된 리포트가 없으면 REPORT_NOT_FOUND를 던진다.
+	 * 리포트 생성은 오직 {@link #generateTodayReport}(피부 분석 완료 시점)에서만 일어난다.
+	 */
+	public ReportDto.Response getLatestSkinReport(Long userId) {
+		return getLatestSavedReport(userId)
+				.orElseThrow(() -> new GlobalException(ErrorCode.REPORT_NOT_FOUND));
+	}
+
+	/**
+	 * 원인 리포트가 아직 없는 상황(피부 분석/체크인 이력 부족 등)을 예외로 전파하지 않고 빈 값으로
+	 * 돌려준다. RoutineService 등 "있으면 참고하고, 없으면 폴백"해야 하는 호출부가 안전하게 쓸 수 있다.
 	 */
 	public Optional<ReportDto.Response> tryGetLatestSkinReport(Long userId) {
 		try {
 			return Optional.of(getLatestSkinReport(userId));
 		} catch (GlobalException e) {
-			log.info("원인 리포트를 아직 계산할 수 없어 폴백 처리: userId={}, errorCode={}", userId, e.getErrorCode());
+			log.info("원인 리포트를 아직 조회할 수 없어 폴백 처리: userId={}, errorCode={}", userId, e.getErrorCode());
 			return Optional.empty();
 		}
 	}
 
 	/**
-	 * 홈 대시보드 통합 조회 전용: getLatestSkinReport()/tryGetLatestSkinReport()와 달리 find-or-create를
-	 * 절대 수행하지 않는다 - 이미 저장된 Report가 없으면 새로 계산(OpenAI 호출)하지 않고 그대로
-	 * Optional.empty()를 반환한다. 홈 조회는 순수 DB 읽기여야 하므로 이 메서드만 사용해야 한다.
+	 * 홈 대시보드 통합 조회 전용. getLatestSkinReport()와 동일하게 순수 조회이며 새로 계산/저장하지 않는다.
 	 */
 	public Optional<ReportDto.Response> getLatestSavedReport(Long userId) {
 		return reportRepository.findTopByCurrentSkinAnalysis_UserIdOrderByReportDateDescIdDesc(userId)
@@ -113,20 +245,26 @@ public class ReportService {
 	}
 
 	/**
-	 * 리포트 보관함 목록(ISSUE-29, GET /api/v1/reports).
+	 * 리포트 보관함 목록(분석 메인 화면, GET /api/v1/reports). 항상 로그인 사용자(userId) 범위로만
+	 * 조회하므로 다른 사용자의 리포트가 섞일 수 없다.
 	 *
-	 * 이미 DB에 생성되어 있는 Report만 조회한다 - find-or-create를 수행하는 getLatestSkinReport()와
-	 * 달리 새로운 분석/저장을 유발하지 않으므로 OpenAI를 호출하지 않는다. date가 주어지면 해당 날짜의
-	 * 리포트만, 없으면 전체 리포트를 최신순(reportDate desc, 동일 날짜면 id desc)으로 반환한다.
-	 * 결과가 없으면 에러 없이 빈 목록을 반환한다.
+	 * - date가 주어지면 해당 날짜의 리포트만 반환한다(startDate/endDate는 무시).
+	 * - date가 없으면 startDate~endDate(둘 다 기본값 있음) 기간의 리포트를 반환한다:
+	 *   endDate 생략 시 오늘, startDate 생략 시 "그 endDate 기준 최근 30일"(= endDate - 29일)을 기본값으로 쓴다.
+	 *   즉 아무 파라미터도 없으면 "최근 30일(오늘 포함)"이 기본 동작이다.
 	 *
-	 * 이번 이슈 범위에서는 userId 기반 사용자별 분리를 다루지 않는다(기존 Report/Checkin/SkinAnalysis와
-	 * 동일하게 전역 데이터 기준) - 관련 TODO는 ReportRepository에 남겨둔다.
+	 * 최신순(reportDate desc, 동일 날짜면 id desc)으로 반환하며, 결과가 없으면 빈 배열이다. 순수 조회.
 	 */
-	public ReportDto.ListResponse getReports(Long userId, LocalDate date) {
-		List<Report> reports = date != null
-				? reportRepository.findByReportDateOrderByIdDesc(date) // userId 조건 필요시 추가 가능
-				: reportRepository.findAllByOrderByReportDateDescIdDesc();
+	public ReportDto.ListResponse getReports(Long userId, LocalDate date, LocalDate startDate, LocalDate endDate) {
+		List<Report> reports;
+		if (date != null) {
+			reports = reportRepository.findAllByCurrentSkinAnalysis_UserIdAndReportDateOrderByIdDesc(userId, date);
+		} else {
+			LocalDate rangeEnd = endDate != null ? endDate : LocalDate.now();
+			LocalDate rangeStart = startDate != null ? startDate : rangeEnd.minusDays(DEFAULT_REPORT_LIST_DAYS - 1L);
+			reports = reportRepository
+					.findAllByCurrentSkinAnalysis_UserIdAndReportDateBetweenOrderByReportDateDescIdDesc(userId, rangeStart, rangeEnd);
+		}
 		List<ReportDto.ReportListItem> items = reports.stream()
 				.map(ReportDto.ReportListItem::from)
 				.toList();
@@ -134,25 +272,23 @@ public class ReportService {
 	}
 
 	/**
-	 * 리포트 상세 조회(ISSUE-29, GET /api/v1/reports/{reportId}).
-	 *
-	 * 기존 getLatestSkinReport()가 쓰는 것과 동일한 ReportDto.Response/parsePrimaryCauses를 그대로
-	 * 재사용한다 - id로 조회한다는 점만 다르고 새로운 분석/저장은 일으키지 않는다.
+	 * 리포트 상세 조회(GET /api/v1/reports/{reportId}). 요청한 사용자가 이 리포트(의 currentSkinAnalysis)의
+	 * 소유자가 아니면 FORBIDDEN을 던진다 - reportId를 순차 대입해 다른 사용자의 리포트를 열람하지 못하게 한다.
 	 */
-	public ReportDto.Response getReport(Long reportId) {
+	public ReportDto.Response getReport(Long userId, Long reportId) {
 		Report report = reportRepository.findById(reportId)
 				.orElseThrow(() -> new GlobalException(ErrorCode.REPORT_NOT_FOUND));
+		if (!report.getCurrentSkinAnalysis().getUserId().equals(userId)) {
+			log.warn("리포트 상세 조회 거부: 다른 사용자의 리포트 - reportId={}, ownerUserId={}, requestUserId={}",
+					reportId, report.getCurrentSkinAnalysis().getUserId(), userId);
+			throw new GlobalException(ErrorCode.FORBIDDEN);
+		}
 		return ReportDto.Response.of(report, parsePrimaryCauses(report.getPrimaryCausesJson()));
 	}
 
 	/**
-	 * 고위험 조합 경고(ISSUE-27, GET /api/v1/reports/causes/latest/warnings).
-	 *
-	 * 최신 원인 리포트를 새로 계산하지 않고 getLatestSkinReport()를 그대로 호출해 primaryCauses를
-	 * 재사용한다(체크인 원본을 다시 조회/계산하지 않음). 데이터가 없거나 부족하면 getLatestSkinReport()가
-	 * 던지는 예외(SKIN_ANALYSIS_NOT_FOUND 등)가 그대로 전파된다 - 고위험 조합이 "없는" 것과
-	 * 원인 리포트 자체가 "없는" 것은 다른 상황이므로 구분한다. 매칭되는 고위험 조합이 없을 때만
-	 * 빈 warnings 배열을 반환한다.
+	 * 고위험 조합 경고(GET /api/v1/reports/causes/latest/warnings). 최신 원인 리포트를 새로 계산하지
+	 * 않고 순수 조회 결과의 primaryCauses를 재사용한다.
 	 */
 	public ReportDto.WarningsResponse getLatestCauseWarnings(Long userId) {
 		ReportDto.Response latestReport = getLatestSkinReport(userId);
@@ -161,12 +297,7 @@ public class ReportService {
 	}
 
 	/**
-	 * 원인 요인 상호작용 설명(ISSUE-28, GET /api/v1/reports/causes/latest/interactions).
-	 *
-	 * getLatestCauseWarnings()와 같은 방식으로 getLatestSkinReport()의 primaryCauses를 재사용하고,
-	 * CauseCombinationRubric의 조합 매칭 규칙(#27과 동일한 매칭 로직)을 그대로 재사용하되, 의료적
-	 * 인과관계로 단정하지 않는 상호작용 전용 문구로 응답을 구성한다. 함께 관찰된 조합이 없으면
-	 * 에러 없이 빈 interactions 배열을 반환한다.
+	 * 원인 요인 상호작용 설명(GET /api/v1/reports/causes/latest/interactions).
 	 */
 	public ReportDto.InteractionsResponse getLatestCauseInteractions(Long userId) {
 		ReportDto.Response latestReport = getLatestSkinReport(userId);
@@ -175,16 +306,26 @@ public class ReportService {
 	}
 
 	/**
-	 * 피부 컨디션 신호 카드(ISSUE-28, GET /api/v1/reports/causes/latest/skin-signal).
+	 * 피부 컨디션 신호 카드(GET /api/v1/reports/causes/latest/skin-signal).
 	 *
 	 * fallback 우선순위(신규 Vision/OpenAI 호출 및 SkinComparison 신규 생성 금지):
 	 * 1) 최신 리포트가 참조하는 (current, previous) SkinAnalysis 쌍에 대해 이미 계산된 SkinComparison이
 	 *    있으면 그 ChangeDirection(AI 이미지 비교 판단)을 그대로 사용한다.
-	 * 2) 없으면 Report에 이미 저장된 redness/trouble의 ReportChangeStatus(SkinAnalysisLevel 서수
-	 *    변화로 이 서비스가 계산한 값)를 ChangeDirection으로 매핑해 대체 신호로 사용한다.
+	 * 2) 없으면 Report에 이미 저장된 redness/trouble의 ReportChangeStatus를 ChangeDirection으로 매핑해
+	 *    대체 신호로 사용한다.
+	 * 3) previous가 아예 없으면(첫 피부 분석) 비교 자체가 불가능하므로 STABLE + 안내 문구를 반환한다.
 	 */
 	public ReportDto.SkinSignalResponse getLatestSkinSignal(Long userId) {
-		Report report = getOrCreateLatestReport(userId);
+		Report report = reportRepository.findTopByCurrentSkinAnalysis_UserIdOrderByReportDateDescIdDesc(userId)
+				.orElseThrow(() -> new GlobalException(ErrorCode.REPORT_NOT_FOUND));
+
+		if (report.getPreviousSkinAnalysis() == null) {
+			String message = "첫 피부 분석이라 아직 비교할 데이터가 없어요.";
+			ReportDto.SkinSignalItem redness = new ReportDto.SkinSignalItem(ChangeDirection.STABLE, message);
+			ReportDto.SkinSignalItem trouble = new ReportDto.SkinSignalItem(ChangeDirection.STABLE, message);
+			return new ReportDto.SkinSignalResponse(redness, trouble);
+		}
+
 		Long currentSkinAnalysisId = report.getCurrentSkinAnalysis().getId();
 		Long previousSkinAnalysisId = report.getPreviousSkinAnalysis().getId();
 
@@ -208,130 +349,13 @@ public class ReportService {
 	}
 
 	/**
-	 * 최신 SkinAnalysis 기준 Report를 find-or-create로 반환한다(REP-101 핵심 로직).
-	 * getLatestSkinReport() DTO 변환뿐 아니라, Report 엔티티가 가진 연관 SkinAnalysis(id)나
-	 * status가 그대로 필요한 skin-signal(ISSUE-28) 같은 기능에서도 재사용한다 - 새로운 분석/저장을
-	 * 유발하지 않고 항상 같은 find-or-create 결과를 공유하기 위함이다.
+	 * 루틴 생성(RoutineService)이 방금 만들어진 오늘 Report의 primaryCauses를 재조회 없이 그대로 반영할 수
+	 * 있도록, 이미 저장된 Report 엔티티에서 원인 요인 목록만 뽑아준다. 새로운 조회/AI 호출을 하지 않는다.
 	 */
-	private Report getOrCreateLatestReport(Long userId) {
-		List<SkinAnalysis> latestAnalyses = skinAnalysisRepository.findTop2ByUserIdOrderByAnalyzedAtDesc(userId);
-		if (latestAnalyses.isEmpty()) {
-			throw new GlobalException(ErrorCode.SKIN_ANALYSIS_NOT_FOUND);
-		}
-		if (latestAnalyses.size() < 2) {
-			throw new GlobalException(ErrorCode.INSUFFICIENT_ANALYSIS_DATA);
-		}
-		SkinAnalysis current = latestAnalyses.get(0);
-		SkinAnalysis previous = latestAnalyses.get(1);
-
-		Optional<Report> existing = reportRepository.findByCurrentSkinAnalysis_Id(current.getId());
-		if (existing.isPresent()) {
-			log.info("기존 리포트 재사용: reportId={}, currentSkinAnalysisId={}", existing.get().getId(), current.getId());
-			return existing.get();
-		}
-
-		return createReport(userId, current, previous);
-	}
-
-	private Report createReport(Long userId, SkinAnalysis current, SkinAnalysis previous) {
-		Object lock = reportCreationLocks.computeIfAbsent(current.getId(), id -> new Object());
-		synchronized (lock) {
-			// 락을 기다리는 동안 다른 요청이 먼저 생성/저장을 끝냈을 수 있으므로 다시 확인한다(double-checked).
-			Optional<Report> existing = reportRepository.findByCurrentSkinAnalysis_Id(current.getId());
-			if (existing.isPresent()) {
-				log.info("동시 요청으로 먼저 생성된 리포트를 재사용(OpenAI 재호출 없음): reportId={}, currentSkinAnalysisId={}",
-						existing.get().getId(), current.getId());
-				return existing.get();
-			}
-
-			LocalDate referenceDate = current.getAnalyzedAt().toLocalDate();
-			List<Checkin> checkins = checkinRepository.findAllByUserIdAndCheckedDateLessThanEqualOrderByCheckedDateDesc(userId, referenceDate);
-			if (checkins.isEmpty()) {
-				throw new GlobalException(ErrorCode.CHECKIN_NOT_FOUND);
-			}
-			Checkin latestCheckin = checkins.get(0);
-			List<Checkin> previousCheckins = checkins.subList(1, checkins.size());
-
-			int rednessPreviousScore = previous.getRednessLevel().ordinal();
-			int rednessCurrentScore = current.getRednessLevel().ordinal();
-			int troublePreviousScore = previous.getTroubleLevel().ordinal();
-			int troubleCurrentScore = current.getTroubleLevel().ordinal();
-			int rednessChange = rednessCurrentScore - rednessPreviousScore;
-			int troubleChange = troubleCurrentScore - troublePreviousScore;
-			ReportChangeStatus rednessStatus = toReportChangeStatus(rednessChange);
-			ReportChangeStatus troubleStatus = toReportChangeStatus(troubleChange);
-
-			log.info("리포트 점수 계산: redness {}→{}(change={}, {}), trouble {}→{}(change={}, {})",
-					rednessPreviousScore, rednessCurrentScore, rednessChange, rednessStatus,
-					troublePreviousScore, troubleCurrentScore, troubleChange, troubleStatus);
-
-			// 피부 변화 비교(#1): 직전 분석 대비 증가/유지/감소. 이미 계산된 SkinComparison(AI 이미지 비교,
-			// POST /api/v1/skin-comparisons로 별도 생성됨)이 있으면 재사용하고, 없으면 위에서 계산한
-			// status로부터 결정적으로 유도한다(GPT 재호출 없음) - getLatestSkinSignal()과 동일한 fallback 규칙.
-			Optional<SkinComparison> comparison = skinComparisonRepository
-					.findByCurrentSkinAnalysis_IdAndPreviousSkinAnalysis_Id(current.getId(), previous.getId());
-			ChangeDirection rednessDirection = comparison.map(SkinComparison::getRednessChange)
-					.orElseGet(() -> toChangeDirection(rednessStatus));
-			ChangeDirection troubleDirection = comparison.map(SkinComparison::getTroubleChange)
-					.orElseGet(() -> toChangeDirection(troubleStatus));
-
-			// baseline(최초 분석) 참조: 두 번째 분석이면 previous가 곧 baseline이고, 그 이후 분석이면
-			// baseline은 previous보다 더 이전 시점이다. 어느 쪽이든 baseline 등급을 참고 정보로 함께 전달한다.
-			Optional<SkinAnalysis> baseline = skinAnalysisRepository.findFirstByUserIdOrderByAnalyzedAtAsc(userId);
-			boolean comparedAgainstBaseline = baseline.map(SkinAnalysis::getId)
-					.map(id -> id.equals(previous.getId())).orElse(false);
-			SkinAnalysisLevel baselineRednessLevel = baseline.map(SkinAnalysis::getRednessLevel).orElse(null);
-			SkinAnalysisLevel baselineTroubleLevel = baseline.map(SkinAnalysis::getTroubleLevel).orElse(null);
-
-			AiDto.SkinChangeInput skinChangeInput = new AiDto.SkinChangeInput(
-					rednessChange, rednessStatus, rednessDirection,
-					troubleChange, troubleStatus, troubleDirection,
-					comparedAgainstBaseline, baselineRednessLevel, baselineTroubleLevel
-			);
-
-			// 목표 음수량 반영: 온보딩/프로필에서 계산·저장된 User.waterGoalMl을 조회해 수분 판정에 사용한다.
-			Integer waterGoalMl = userRepository.findById(userId).map(User::getWaterGoalMl).orElse(null);
-			// 생활습관 요인판정: GPT에 raw 수치만 넘기지 않고, 먼저 백엔드가 GOOD/MODERATE/POOR로 판정한다.
-			LifestyleFactorRubric.Judgment judgment = lifestyleFactorRubric.judge(latestCheckin, previousCheckins, waterGoalMl);
-			// 주요 위험 요인 후보(#3): POOR로 판정된 요인만 백엔드가 후보로 확정한다. GPT는 causes를
-			// 이 후보에 대해서만 작성해야 하고, 아래에서 이 목록 기준으로 한 번 더 걸러 코드 레벨로 강제한다.
-			List<ReportCauseFactor> candidateFactors = resolveCandidateFactors(judgment);
-			AiDto.CheckinInput checkinInput = buildCheckinInput(latestCheckin, previousCheckins, judgment, candidateFactors);
-
-			log.info("OpenAI 원인 분석 요청 시작: currentSkinAnalysisId={}, candidateFactors={}", current.getId(), candidateFactors);
-			AiDto.CauseAnalysisResult causeAnalysisResult = aiClient.analyzeSkinChangeCauses(skinChangeInput, checkinInput);
-			validateCauseAnalysisResult(causeAnalysisResult);
-
-			List<ReportDto.PrimaryCause> primaryCauses = causeAnalysisResult.causes().stream()
-					.filter(cause -> {
-						boolean isCandidate = candidateFactors.contains(cause.factor());
-						if (!isCandidate) {
-							log.warn("AI가 후보 목록 밖의 요인을 반환해 제외함: factor={}, candidateFactors={}",
-									cause.factor(), candidateFactors);
-						}
-						return isCandidate;
-					})
-					.map(cause -> enrichCause(cause, latestCheckin))
-					.toList();
-
-			Report report = new Report(
-					current, previous, referenceDate,
-					rednessPreviousScore, rednessCurrentScore, rednessStatus,
-					troublePreviousScore, troubleCurrentScore, troubleStatus,
-					toJson(primaryCauses), causeAnalysisResult.summary()
-			);
-
-			try {
-				Report saved = reportRepository.save(report);
-				log.info("리포트 저장 완료: reportId={}, currentSkinAnalysisId={}", saved.getId(), current.getId());
-				return saved;
-			} catch (DataIntegrityViolationException e) {
-				// 락으로 막지 못한 경합(예: 다중 인스턴스 배포)에 대한 최종 안전장치.
-				// unique 제약 위반은 곧 다른 요청이 먼저 저장에 성공했다는 뜻이므로, 그 결과를 재조회해서 반환한다.
-				log.warn("리포트 저장 중 unique 제약 충돌 - 동시 요청으로 이미 생성된 리포트를 재사용: currentSkinAnalysisId={}", current.getId());
-				return reportRepository.findByCurrentSkinAnalysis_Id(current.getId()).orElseThrow(() -> e);
-			}
-		}
+	public List<ReportCauseFactor> getPrimaryCauseFactors(Report report) {
+		return parsePrimaryCauses(report.getPrimaryCausesJson()).stream()
+				.map(ReportDto.PrimaryCause::factor)
+				.toList();
 	}
 
 	private AiDto.CheckinInput buildCheckinInput(
@@ -353,9 +377,9 @@ public class ReportService {
 		);
 	}
 
-	// 주요 위험 요인 후보(#3): 생활습관 요인 중 POOR로 판정된 것만 "원인 후보"로 확정한다.
+	// 주요 위험 요인 후보: 생활습관 요인 중 POOR로 판정된 것만 "원인 후보"로 확정한다.
 	// GOOD/MODERATE는 문제로 보지 않으므로 후보에 넣지 않는다 - GPT가 정상 요인을 임의로 원인으로
-	// 선정하지 못하도록 하는 첫 번째 방어선이며, 두 번째 방어선은 createReport()의 causes 필터링이다.
+	// 선정하지 못하도록 하는 첫 번째 방어선이며, 두 번째 방어선은 generateTodayReport()의 causes 필터링이다.
 	private List<ReportCauseFactor> resolveCandidateFactors(LifestyleFactorRubric.Judgment judgment) {
 		List<ReportCauseFactor> candidates = new ArrayList<>();
 		if (judgment.sleepLevel() == LifestyleFactorLevel.POOR) {
@@ -372,8 +396,6 @@ public class ReportService {
 
 	// score(SkinAnalysisLevel ordinal) 변화량만으로 status를 결정한다. ordinal이 낮을수록(SAFE에 가까울수록)
 	// 좋은 상태이므로 change < 0(등급이 낮아짐)은 IMPROVED, change > 0은 WORSENED다.
-	// AI의 판단(SkinComparisonService의 ChangeDirection)은 여기서 쓰지 않는다 - score와 status가
-	// 서로 다른 기준이 되어 모순된 응답(예: change=0인데 status=WORSENED)이 나오지 않도록 하기 위함이다.
 	private ReportChangeStatus toReportChangeStatus(int change) {
 		if (change < 0) {
 			return ReportChangeStatus.IMPROVED;
@@ -384,9 +406,7 @@ public class ReportService {
 		return ReportChangeStatus.UNCHANGED;
 	}
 
-	// skin-signal(ISSUE-28)에서 SkinComparison이 없을 때의 대체 신호 변환.
-	// Report.status는 SkinAnalysisLevel ordinal 변화(등급이 좋아짐/유지/나빠짐)로 계산되므로,
-	// 그 의미를 그대로 ChangeDirection(감소/유지/증가)에 대응시킨다: 등급이 좋아짐(IMPROVED) = 감소(DECREASED).
+	// skin-signal에서 SkinComparison이 없을 때의 대체 신호 변환.
 	private ChangeDirection toChangeDirection(ReportChangeStatus status) {
 		return switch (status) {
 			case IMPROVED -> ChangeDirection.DECREASED;
@@ -411,14 +431,19 @@ public class ReportService {
 		};
 	}
 
-	private ReportDto.PrimaryCause enrichCause(AiDto.Cause cause, Checkin latestCheckin) {
+	// 기준값/차이/기준종류는 LifestyleFactorRubric이 이미 계산해둔 FactorJudgment를 그대로 옮겨 담을 뿐,
+	// 여기서 새로 계산하지 않는다("평균 수면 5.4h / 현재 7h / 차이 +1.6h" 근거를 API로 노출하기 위함).
+	private ReportDto.PrimaryCause enrichCause(AiDto.Cause cause, Checkin latestCheckin, LifestyleFactorRubric.Judgment judgment) {
 		return switch (cause.factor()) {
 			case SLEEP -> new ReportDto.PrimaryCause(
-					cause.factor(), cause.name(), latestCheckin.getSleepHours(), "시간", cause.description());
+					cause.factor(), cause.name(), latestCheckin.getSleepHours(), "시간", cause.description(),
+					judgment.sleep().baselineValue(), judgment.sleep().difference(), judgment.sleep().baselineType());
 			case STRESS -> new ReportDto.PrimaryCause(
-					cause.factor(), cause.name(), latestCheckin.getStressLevel().doubleValue(), "5단계", cause.description());
+					cause.factor(), cause.name(), latestCheckin.getStressLevel().doubleValue(), "5단계", cause.description(),
+					judgment.stress().baselineValue(), judgment.stress().difference(), judgment.stress().baselineType());
 			case WATER_INTAKE -> new ReportDto.PrimaryCause(
-					cause.factor(), cause.name(), latestCheckin.getWaterIntakeMl().doubleValue(), "ml", cause.description());
+					cause.factor(), cause.name(), latestCheckin.getWaterIntakeMl().doubleValue(), "ml", cause.description(),
+					judgment.water().baselineValue(), judgment.water().difference(), judgment.water().baselineType());
 		};
 	}
 

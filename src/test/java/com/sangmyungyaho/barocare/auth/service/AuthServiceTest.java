@@ -71,7 +71,7 @@ class AuthServiceTest {
 	void 온보딩을_마친_기존_사용자는_isNewUser가_false이고_isOnboarded는_true다() {
 		OAuth2UserInfo userInfo = kakaoUserInfo("kakao-1", "닉네임");
 		User existingUser = User.builder().provider(Provider.KAKAO).socialId("kakao-1").nickname("닉네임").build();
-		existingUser.updateProfile("닉네임", 170.0, 60.0, null, 2000); // updateProfile 내부에서 isOnboarded=true로 설정됨
+		existingUser.completeOnboarding(); // fix: 온보딩 완료 이슈 이후 updateProfile()은 더 이상 isOnboarded를 바꾸지 않으므로 완료 API와 동일하게 completeOnboarding()으로 상태를 만든다.
 		ReflectionTestUtils.setField(existingUser, "id", 1L);
 
 		when(oAuth2ClientService.getKakaoAccessToken("code")).thenReturn("kakao-access-token");

@@ -28,9 +28,13 @@ public class ReportController {
 	private final ReportService reportService;
 
 	@Operation(
-			summary = "리포트 보관함 목록 조회(ISSUE-29)",
-			description = "이미 생성되어 있는 Report만 조회한다(새로운 분석/저장 없음, OpenAI 재호출 없음). "
-					+ "date 쿼리 파라미터가 있으면 해당 날짜의 리포트만, 없으면 전체 리포트를 최신순으로 반환한다. "
+			summary = "리포트 보관함 목록 조회(ISSUE-29, 분석 메인 화면)",
+			description = "로그인 사용자 본인의 Report만 조회한다(새로운 분석/저장 없음, OpenAI 재호출 없음, 다른 사용자의 "
+					+ "리포트는 절대 섞이지 않는다). "
+					+ "date가 있으면 해당 날짜의 리포트만 반환하고(startDate/endDate는 이때 무시됨), "
+					+ "date가 없으면 startDate~endDate 기간의 리포트를 반환한다 - endDate 생략 시 오늘, "
+					+ "startDate 생략 시 그 endDate 기준 최근 30일을 기본값으로 사용한다. "
+					+ "즉 파라미터를 아무것도 주지 않으면 \"최근 30일(오늘 포함)\"이 기본 동작이다. "
 					+ "조회 결과가 없으면 에러 없이 빈 배열을 반환한다."
 	)
 	@ApiResponses({
@@ -60,23 +64,38 @@ public class ReportController {
 	@GetMapping("/api/v1/reports")
 	public ResponseEntity<ApiResponse<ReportDto.ListResponse>> getReports(
 			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
-			@Parameter(description = "조회할 리포트 기준일(YYYY-MM-DD). 생략하면 전체 리포트를 최신순으로 조회한다.", example = "2026-08-07")
-			@RequestParam(required = false) LocalDate date
+			@Parameter(description = "조회할 리포트 기준일(YYYY-MM-DD). 주어지면 이 날짜만 조회하고 startDate/endDate는 무시된다.", example = "2026-08-07")
+			@RequestParam(required = false) LocalDate date,
+			@Parameter(description = "조회 기간 시작일(YYYY-MM-DD, 포함). 생략하면 endDate 기준 최근 30일.", example = "2026-07-19")
+			@RequestParam(required = false) LocalDate startDate,
+			@Parameter(description = "조회 기간 종료일(YYYY-MM-DD, 포함). 생략하면 오늘.", example = "2026-08-17")
+			@RequestParam(required = false) LocalDate endDate
 	) {
 		Long userId = Long.parseLong(userDetails.getUsername());
-		ReportDto.ListResponse response = reportService.getReports(userId, date);
+		ReportDto.ListResponse response = reportService.getReports(userId, date, startDate, endDate);
 		return ResponseEntity.ok(ApiResponse.success("리포트 목록을 조회했습니다.", response));
 	}
 
 	@Operation(
 			summary = "리포트 상세 조회(ISSUE-29)",
 			description = "reportId로 특정 리포트를 상세 조회한다. GET /api/v1/reports/skin/latest와 동일한 "
-					+ "ReportDto.Response를 그대로 재사용하며, 새로운 분석/저장이나 OpenAI 재호출은 발생하지 않는다."
+					+ "ReportDto.Response를 그대로 재사용하며, 새로운 분석/저장이나 OpenAI 재호출은 발생하지 않는다. "
+					+ "요청한 사용자가 해당 리포트의 소유자가 아니면 FORBIDDEN을 반환한다."
 	)
 	@ApiResponses({
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
 					responseCode = "200", description = "조회 성공",
 					content = @Content(schema = @Schema(implementation = ReportDto.Response.class))
+			),
+			@io.swagger.v3.oas.annotations.responses.ApiResponse(
+					responseCode = "403", description = "다른 사용자의 리포트입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "FORBIDDEN",
+									value = "{\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"해당 리소스에 접근할 권한이 없습니다.\"}}"
+							)
+					)
 			),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
 					responseCode = "404", description = "존재하지 않는 리포트입니다.",
@@ -91,57 +110,32 @@ public class ReportController {
 	})
 	@GetMapping("/api/v1/reports/{reportId}")
 	public ResponseEntity<ReportDto.Response> getReport(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
 			@Parameter(description = "조회할 리포트 ID", example = "101")
 			@PathVariable Long reportId
 	) {
-		return ResponseEntity.ok(reportService.getReport(reportId));
+		Long userId = Long.parseLong(userDetails.getUsername());
+		return ResponseEntity.ok(reportService.getReport(userId, reportId));
 	}
 
 	@Operation(
 			summary = "최신 피부 변화 원인 리포트 조회",
-			description = "가장 최근 SkinAnalysis와 그 직전 SkinAnalysis를 비교하고, 체크인 데이터를 근거로 "
-					+ "피부 변화의 주요 원인 후보를 분석해 반환한다. "
-					+ "같은 최신 SkinAnalysis를 기준으로 이미 생성된 리포트가 있으면 재사용하고(OpenAI 재호출 없음), "
-					+ "없으면 새로 분석해서 저장한 뒤 반환한다."
+			description = "가장 최근에 저장된 원인 리포트를 그대로 반환하는 순수 조회 API다(OpenAI 호출 없음, 새로 "
+					+ "생성하지 않음). 리포트 생성은 오직 피부 분석 완료 시점(POST /api/v1/skin-analyses)에만 일어난다."
 	)
 	@ApiResponses({
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "200", description = "조회 성공(기존 리포트 재사용 또는 신규 생성 후 반환)",
+					responseCode = "200", description = "조회 성공(저장된 리포트를 그대로 반환)",
 					content = @Content(schema = @Schema(implementation = ReportDto.Response.class))
 			),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "404", description = "피부 분석 또는 체크인 기록이 없습니다.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = {
-									@ExampleObject(
-											name = "SKIN_ANALYSIS_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
-									),
-									@ExampleObject(
-											name = "CHECKIN_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"CHECKIN_NOT_FOUND\",\"message\":\"원인 분석에 필요한 체크인 기록이 없습니다.\"}}"
-									)
-							}
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "422", description = "피부 변화를 비교하기 위한 기록이 충분하지 않습니다(SkinAnalysis 2건 미만).",
+					responseCode = "404", description = "아직 생성된 원인 리포트가 없습니다(리포트 생성은 GET이 아니라 "
+							+ "피부 분석 완료 시점(POST /api/v1/skin-analyses)에만 일어난다 - 체크인/피부 분석을 먼저 진행해야 한다).",
 					content = @Content(
 							schema = @Schema(implementation = ErrorResponse.class),
 							examples = @ExampleObject(
-									name = "INSUFFICIENT_ANALYSIS_DATA",
-									value = "{\"error\":{\"code\":\"INSUFFICIENT_ANALYSIS_DATA\",\"message\":\"피부 변화를 비교하기 위한 기록이 충분하지 않습니다.\"}}"
-							)
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "502", description = "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = @ExampleObject(
-									name = "AI_ANALYSIS_FAILED",
-									value = "{\"error\":{\"code\":\"AI_ANALYSIS_FAILED\",\"message\":\"AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.\"}}"
+									name = "REPORT_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"REPORT_NOT_FOUND\",\"message\":\"존재하지 않는 리포트입니다.\"}}"
 							)
 					)
 			)
@@ -162,42 +156,17 @@ public class ReportController {
 	)
 	@ApiResponses({
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "200", description = "조회 성공(기존 리포트 재사용 또는 신규 생성 후 반환)",
+					responseCode = "200", description = "조회 성공(저장된 리포트를 그대로 반환)",
 					content = @Content(schema = @Schema(implementation = ReportDto.Response.class))
 			),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "404", description = "피부 분석 또는 체크인 기록이 없습니다.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = {
-									@ExampleObject(
-											name = "SKIN_ANALYSIS_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
-									),
-									@ExampleObject(
-											name = "CHECKIN_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"CHECKIN_NOT_FOUND\",\"message\":\"원인 분석에 필요한 체크인 기록이 없습니다.\"}}"
-									)
-							}
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "422", description = "피부 변화를 비교하기 위한 기록이 충분하지 않습니다(SkinAnalysis 2건 미만).",
+					responseCode = "404", description = "아직 생성된 원인 리포트가 없습니다(리포트 생성은 GET이 아니라 "
+							+ "피부 분석 완료 시점(POST /api/v1/skin-analyses)에만 일어난다 - 체크인/피부 분석을 먼저 진행해야 한다).",
 					content = @Content(
 							schema = @Schema(implementation = ErrorResponse.class),
 							examples = @ExampleObject(
-									name = "INSUFFICIENT_ANALYSIS_DATA",
-									value = "{\"error\":{\"code\":\"INSUFFICIENT_ANALYSIS_DATA\",\"message\":\"피부 변화를 비교하기 위한 기록이 충분하지 않습니다.\"}}"
-							)
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "502", description = "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = @ExampleObject(
-									name = "AI_ANALYSIS_FAILED",
-									value = "{\"error\":{\"code\":\"AI_ANALYSIS_FAILED\",\"message\":\"AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.\"}}"
+									name = "REPORT_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"REPORT_NOT_FOUND\",\"message\":\"존재하지 않는 리포트입니다.\"}}"
 							)
 					)
 			)
@@ -244,38 +213,13 @@ public class ReportController {
 					)
 			),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "404", description = "피부 분석 또는 체크인 기록이 없습니다.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = {
-									@ExampleObject(
-											name = "SKIN_ANALYSIS_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
-									),
-									@ExampleObject(
-											name = "CHECKIN_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"CHECKIN_NOT_FOUND\",\"message\":\"원인 분석에 필요한 체크인 기록이 없습니다.\"}}"
-									)
-							}
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "422", description = "피부 변화를 비교하기 위한 기록이 충분하지 않습니다(SkinAnalysis 2건 미만).",
+					responseCode = "404", description = "아직 생성된 원인 리포트가 없습니다(리포트 생성은 GET이 아니라 "
+							+ "피부 분석 완료 시점(POST /api/v1/skin-analyses)에만 일어난다 - 체크인/피부 분석을 먼저 진행해야 한다).",
 					content = @Content(
 							schema = @Schema(implementation = ErrorResponse.class),
 							examples = @ExampleObject(
-									name = "INSUFFICIENT_ANALYSIS_DATA",
-									value = "{\"error\":{\"code\":\"INSUFFICIENT_ANALYSIS_DATA\",\"message\":\"피부 변화를 비교하기 위한 기록이 충분하지 않습니다.\"}}"
-							)
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "502", description = "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = @ExampleObject(
-									name = "AI_ANALYSIS_FAILED",
-									value = "{\"error\":{\"code\":\"AI_ANALYSIS_FAILED\",\"message\":\"AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.\"}}"
+									name = "REPORT_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"REPORT_NOT_FOUND\",\"message\":\"존재하지 않는 리포트입니다.\"}}"
 							)
 					)
 			)
@@ -311,38 +255,13 @@ public class ReportController {
 					)
 			),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "404", description = "피부 분석 또는 체크인 기록이 없습니다.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = {
-									@ExampleObject(
-											name = "SKIN_ANALYSIS_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
-									),
-									@ExampleObject(
-											name = "CHECKIN_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"CHECKIN_NOT_FOUND\",\"message\":\"원인 분석에 필요한 체크인 기록이 없습니다.\"}}"
-									)
-							}
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "422", description = "피부 변화를 비교하기 위한 기록이 충분하지 않습니다(SkinAnalysis 2건 미만).",
+					responseCode = "404", description = "아직 생성된 원인 리포트가 없습니다(리포트 생성은 GET이 아니라 "
+							+ "피부 분석 완료 시점(POST /api/v1/skin-analyses)에만 일어난다 - 체크인/피부 분석을 먼저 진행해야 한다).",
 					content = @Content(
 							schema = @Schema(implementation = ErrorResponse.class),
 							examples = @ExampleObject(
-									name = "INSUFFICIENT_ANALYSIS_DATA",
-									value = "{\"error\":{\"code\":\"INSUFFICIENT_ANALYSIS_DATA\",\"message\":\"피부 변화를 비교하기 위한 기록이 충분하지 않습니다.\"}}"
-							)
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "502", description = "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = @ExampleObject(
-									name = "AI_ANALYSIS_FAILED",
-									value = "{\"error\":{\"code\":\"AI_ANALYSIS_FAILED\",\"message\":\"AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.\"}}"
+									name = "REPORT_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"REPORT_NOT_FOUND\",\"message\":\"존재하지 않는 리포트입니다.\"}}"
 							)
 					)
 			)
@@ -386,38 +305,13 @@ public class ReportController {
 					)
 			),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "404", description = "피부 분석 또는 체크인 기록이 없습니다.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = {
-									@ExampleObject(
-											name = "SKIN_ANALYSIS_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
-									),
-									@ExampleObject(
-											name = "CHECKIN_NOT_FOUND",
-											value = "{\"error\":{\"code\":\"CHECKIN_NOT_FOUND\",\"message\":\"원인 분석에 필요한 체크인 기록이 없습니다.\"}}"
-									)
-							}
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "422", description = "피부 변화를 비교하기 위한 기록이 충분하지 않습니다(SkinAnalysis 2건 미만).",
+					responseCode = "404", description = "아직 생성된 원인 리포트가 없습니다(리포트 생성은 GET이 아니라 "
+							+ "피부 분석 완료 시점(POST /api/v1/skin-analyses)에만 일어난다 - 체크인/피부 분석을 먼저 진행해야 한다).",
 					content = @Content(
 							schema = @Schema(implementation = ErrorResponse.class),
 							examples = @ExampleObject(
-									name = "INSUFFICIENT_ANALYSIS_DATA",
-									value = "{\"error\":{\"code\":\"INSUFFICIENT_ANALYSIS_DATA\",\"message\":\"피부 변화를 비교하기 위한 기록이 충분하지 않습니다.\"}}"
-							)
-					)
-			),
-			@io.swagger.v3.oas.annotations.responses.ApiResponse(
-					responseCode = "502", description = "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = @ExampleObject(
-									name = "AI_ANALYSIS_FAILED",
-									value = "{\"error\":{\"code\":\"AI_ANALYSIS_FAILED\",\"message\":\"AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.\"}}"
+									name = "REPORT_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"REPORT_NOT_FOUND\",\"message\":\"존재하지 않는 리포트입니다.\"}}"
 							)
 					)
 			)
