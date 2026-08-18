@@ -1,0 +1,23 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: barocare-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: barocare
+    ports:
+      - "3306:3306"
+    volumes:
+      - barocare-mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    container_name: barocare-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - barocare-redis-data:/data
+
+volumes:
+  barocare-mysql-data:
+  barocare-redis-data:

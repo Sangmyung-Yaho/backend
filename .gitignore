@@ -40,6 +40,15 @@ out/
 ### Environment
 .env
 
+### Local image storage (MVP, 추후 S3 등으로 교체 예정)
+/uploads/
+
+### 애플리케이션 파일 로그
+/logs/
+
 .claude/
 CLAUDE.md
 .DS_Store
+
+### 로컬 API 검증용 프론트 (실제 서비스 코드 아님)
+/frontend-test/
