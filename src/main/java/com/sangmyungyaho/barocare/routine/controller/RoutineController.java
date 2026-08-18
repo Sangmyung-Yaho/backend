@@ -18,7 +18,13 @@ public class RoutineController {
 
 	private final RoutineService routineService;
 
-	@Operation(summary = "오늘의 루틴 목록 조회", description = "오늘 발급된 루틴 목록과 달성도를 조회합니다.")
+	@Operation(
+			summary = "오늘의 루틴 목록 조회",
+			description = "오늘 발급된 루틴 목록과 달성도를 조회합니다. ISSUE-30: 오늘 피부 분석 시점에 함께 생성된 "
+					+ "추천 성분(recommended_ingredients)과 실시간 웹 검색으로 매칭된 관련 제품(recommended_products)도 "
+					+ "같은 응답에 포함됩니다. 둘 다 순수 조회이며, 이 API를 호출한다고 AI/웹검색이 새로 실행되지 않습니다. "
+					+ "아직 생성 전이거나(오늘 체크인/피부 분석 전) 생성이 실패했다면 두 필드 모두 빈 배열입니다(에러 아님)."
+	)
 	@io.swagger.v3.oas.annotations.responses.ApiResponses({
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "성공"),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증 실패 (UNAUTHORIZED)", content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.sangmyungyaho.barocare.global.exception.ErrorResponse.class)))

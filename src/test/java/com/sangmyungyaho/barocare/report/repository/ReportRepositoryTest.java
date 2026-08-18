@@ -20,8 +20,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * ISSUE-29: 리포트 보관함(GET /api/v1/reports) 조회 쿼리 검증.
  * ReportService의 find-or-create 경로(AI 호출 등)와 무관하게, ReportRepository의 신규 조회
  * 메서드가 실제 JPA 매핑 위에서 올바른 순서/필터로 동작하는지만 검증한다.
+ *
+ * spring.sql.init.mode=never로 src/main/resources/schema.sql 실행을 꺼둔다 - 그 스크립트는
+ * MySQL 전용 문법(ALTER ... MODIFY COLUMN)인데, 이 테스트는 @DataJpaTest 기본 정책상 H2 인메모리
+ * DB를 쓰므로 그대로 두면 스크립트 실행 자체가 문법 오류로 실패한다(운영/개발 MySQL 환경에는 영향 없음).
  */
-@DataJpaTest
+@DataJpaTest(properties = "spring.sql.init.mode=never")
 class ReportRepositoryTest {
 
 	@Autowired

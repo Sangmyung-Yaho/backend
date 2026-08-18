@@ -16,9 +16,18 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
+    # schema.sql(있다면)을 Hibernate가 스키마를 생성/갱신한 다음에 실행한다 - 아직 테이블이 없는
+    # 새 환경에서도 schema.sql이 먼저 돌다가 "테이블 없음" 오류가 나지 않게 하기 위함이다.
+    defer-datasource-initialization: true
     properties:
       hibernate:
         format_sql: true
+
+  sql:
+    init:
+      # MySQL처럼 임베디드가 아닌 데이터소스에서는 기본값(embedded)이면 schema.sql이 실행되지 않는다.
+      # 매 기동마다 실행되지만 schema.sql의 ALTER는 멱등하므로 비용/부작용이 없다.
+      mode: always
 
   ai:
     openai:
