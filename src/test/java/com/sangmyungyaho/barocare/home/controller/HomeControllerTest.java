@@ -71,7 +71,7 @@ class HomeControllerTest {
 		HomeDto.WeeklyCheckinSummary weeklyCheckins = new HomeDto.WeeklyCheckinSummary(
 				List.of(new HomeDto.WeeklyCheckinDay(LocalDate.of(2026, 8, 16), true)), 1);
 		RoutineDto.RoutineResponseDto todayRoutine = new RoutineDto.RoutineResponseDto(
-				true, false, 4L, 3L, 75, List.of());
+				true, false, 4L, 3L, 75, List.of(), List.of(), List.of());
 		HomeDto.DashboardResponse response = new HomeDto.DashboardResponse(weeklyCheckins, null, null, todayRoutine);
 		when(homeService.getDashboard(USER_ID)).thenReturn(response);
 

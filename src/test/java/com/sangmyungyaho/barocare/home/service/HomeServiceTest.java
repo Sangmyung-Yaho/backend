@@ -81,7 +81,7 @@ class HomeServiceTest {
 		when(reportService.getLatestSavedReport(USER_ID)).thenReturn(Optional.of(reportResponse));
 
 		RoutineDto.RoutineResponseDto routineResponse = new RoutineDto.RoutineResponseDto(
-				true, false, 4L, 3L, 75, List.of());
+				true, false, 4L, 3L, 75, List.of(), List.of(), List.of());
 		when(routineService.getTodayRoutines(USER_ID)).thenReturn(routineResponse);
 
 		HomeDto.DashboardResponse response = homeService.getDashboard(USER_ID);
@@ -102,7 +102,7 @@ class HomeServiceTest {
 		ReportDto.Response reportResponse = new ReportDto.Response(101L, today, null, true, List.of(), "요약");
 		when(reportService.getLatestSavedReport(USER_ID)).thenReturn(Optional.of(reportResponse)); // 리포트는 있음
 		when(routineService.getTodayRoutines(USER_ID)).thenReturn(
-				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of()));
+				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of(), List.of(), List.of()));
 
 		HomeDto.DashboardResponse response = homeService.getDashboard(USER_ID);
 
@@ -117,7 +117,7 @@ class HomeServiceTest {
 		when(skinAnalysisService.getLatestDetailForUser(USER_ID)).thenReturn(Optional.empty());
 		when(reportService.getLatestSavedReport(USER_ID)).thenReturn(Optional.empty());
 		when(routineService.getTodayRoutines(USER_ID)).thenReturn(
-				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of()));
+				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of(), List.of(), List.of()));
 
 		HomeDto.DashboardResponse response = homeService.getDashboard(USER_ID);
 
@@ -136,7 +136,7 @@ class HomeServiceTest {
 		when(skinAnalysisService.getLatestDetailForUser(any())).thenReturn(Optional.empty());
 		when(reportService.getLatestSavedReport(any())).thenReturn(Optional.empty());
 		when(routineService.getTodayRoutines(any())).thenReturn(
-				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of()));
+				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of(), List.of(), List.of()));
 
 		homeService.getDashboard(USER_ID);
 
@@ -159,7 +159,7 @@ class HomeServiceTest {
 		when(skinAnalysisService.getLatestDetailForUser(any())).thenReturn(Optional.empty());
 		when(reportService.getLatestSavedReport(any())).thenReturn(Optional.empty());
 		when(routineService.getTodayRoutines(any())).thenReturn(
-				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of()));
+				new RoutineDto.RoutineResponseDto(false, false, 0L, 0L, 0, List.of(), List.of(), List.of()));
 
 		homeService.getDashboard(USER_ID);
 
