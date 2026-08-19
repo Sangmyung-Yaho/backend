@@ -61,11 +61,10 @@ public class GlobalExceptionHandler {
 				.body(ErrorResponse.of(ErrorCode.INVALID_IMAGE));
 	}
 
-	// 업로드 파일이 설정된 최대 크기를 초과한 경우
-	// TODO: 파일 크기 제한 기획이 확정되면 전용 ErrorCode 분리 검토
+	// 업로드 파일이 설정된 최대 크기(spring.servlet.multipart.max-file-size)를 초과한 경우
 	@ExceptionHandler(MaxUploadSizeExceededException.class)
 	public ResponseEntity<ErrorResponse> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e) {
-		return ResponseEntity.status(ErrorCode.INVALID_IMAGE.getStatus())
-				.body(ErrorResponse.of(ErrorCode.INVALID_IMAGE));
+		return ResponseEntity.status(ErrorCode.FILE_TOO_LARGE.getStatus())
+				.body(ErrorResponse.of(ErrorCode.FILE_TOO_LARGE));
 	}
 }
