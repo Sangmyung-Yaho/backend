@@ -43,9 +43,9 @@ public class ProductSearchClient {
 
 	private static final String RESPONSES_API_URL = "https://api.openai.com/v1/responses";
 
-	// web_search 도구를 지원하는 모델만 쓸 수 있다(기존 ChatClient 기본 모델인 gpt-4o-mini는 미지원).
-	// 비용을 고려해 지원 모델 중 가장 저렴한 mini 등급을 사용한다.
-	private static final String MODEL = "gpt-4.1-mini";
+	// web_search 도구를 지원하는 모델만 쓸 수 있다. AiClient(ChatClient)와 동일하게 gpt-5.6 계열 중
+	// 최상위 모델인 Sol을 사용한다 - 현재 사용량이 매우 적어 비용보다 검색·매칭 품질을 우선한다.
+	private static final String MODEL = "gpt-5.6-sol";
 
 	private static final int MAX_PRODUCTS = 3;
 
