@@ -62,3 +62,11 @@ dependencies {
 tasks.named('test') {
 	useJUnitPlatform()
 }
+
+// Spring Boot 플러그인은 기본적으로 bootJar(실행 가능한 fat jar)와 plain jar(의존성 없는 jar)를
+// 둘 다 build/libs/에 만든다. Dockerfile이 build/libs/*.jar app.jar로 와일드카드 COPY를 하는데,
+// jar가 2개면 Docker가 "destination must be a directory" 오류를 내며 이미지 빌드가 실패한다.
+// 이 프로젝트는 plain jar를 쓸 일이 없으므로(라이브러리가 아니라 실행 앱) 아예 만들지 않게 끈다.
+tasks.named('jar') {
+	enabled = false
+}
