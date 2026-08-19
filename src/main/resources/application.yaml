@@ -9,7 +9,7 @@ spring:
     name: barocare
 
   datasource:
-    url: jdbc:mysql://localhost:3306/barocare
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/barocare
     username: root
     password: ${DB_PASSWORD}
 

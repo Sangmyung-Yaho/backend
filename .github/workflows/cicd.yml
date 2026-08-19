@@ -1,0 +1,97 @@
+name: 바로케어 EC2 배포
+
+# main 브랜치에 push가 발생했을 때 실행
+on:
+  push:
+    branches:
+      - main
+
+env:
+  DOCKER_IMAGE_NAME: shlee811/barocare
+  EC2_SSH_USER: ubuntu
+  CONTAINER_NAME: barocare
+
+jobs:
+  build-and-push-to-docker-hub:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: GitHub 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: JDK 17 설치
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: gradlew 실행 권한 부여
+        run: chmod +x gradlew
+
+      - name: Spring Boot 빌드
+        run: ./gradlew clean build -x test
+
+      - name: Docker Hub 로그인
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker 이미지 빌드
+        run: docker build -t ${{ env.DOCKER_IMAGE_NAME }}:latest .
+
+      - name: Docker 이미지 Push
+        run: docker push ${{ env.DOCKER_IMAGE_NAME }}:latest
+
+
+  deploy-to-ec2:
+    needs: build-and-push-to-docker-hub
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: GitHub 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: .env 파일 생성
+        run: |
+          cat <<'EOF' > .env
+          ${{ secrets.ENV }}
+          EOF
+
+      - name: EC2에 .env 파일 복사
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ env.EC2_SSH_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          source: ".env"
+          target: "/home/ubuntu/"
+
+      - name: EC2에 docker-compose.yml 파일 복사
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ env.EC2_SSH_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          source: "docker-compose.yml"
+          target: "/home/ubuntu/"
+
+      - name: Docker Hub 최신 이미지로 EC2 재배포
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ env.EC2_SSH_USER }}
+          port: 22
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/ubuntu
+
+            docker stop ${{ env.CONTAINER_NAME }} || true
+            docker rm ${{ env.CONTAINER_NAME }} || true
+
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" | \
+              docker login \
+              -u "${{ secrets.DOCKERHUB_USERNAME }}" \
+              --password-stdin
+
+            docker compose up -d --pull always
