@@ -12,6 +12,7 @@ import com.sangmyungyaho.barocare.skin.entity.SkinAnalysisLevel;
 import com.sangmyungyaho.barocare.user.entity.Provider;
 import com.sangmyungyaho.barocare.user.entity.User;
 import com.sangmyungyaho.barocare.user.repository.UserRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -26,6 +27,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -54,9 +56,18 @@ class RoutineServiceTest {
 	private UserRepository userRepository;
 	@Mock
 	private ReportService reportService;
+	@Mock
+	private IngredientRecommendationService ingredientRecommendationService;
 
 	@InjectMocks
 	private RoutineService routineService;
+
+	@BeforeEach
+	void setUp() {
+		// getTodayRoutines()를 검증하지 않는 대부분의 테스트에서는 쓰이지 않는 스텁이라 lenient로 표시한다.
+		lenient().when(ingredientRecommendationService.getTodayRecommendation(any()))
+				.thenReturn(IngredientRecommendationService.TodayRecommendation.EMPTY);
+	}
 
 	@Test
 	void 오늘의_루틴_조회는_저장된_루틴만_읽고_원인_분석_AI를_전혀_호출하지_않는다() {
@@ -176,6 +187,69 @@ class RoutineServiceTest {
 	}
 
 	@Test
+	void 루틴_생성_후_오늘_SkinAnalysis_기준으로_추천_성분_생성을_트리거한다() {
+		mockUser(2000);
+		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
+
+		Checkin checkin = checkin(6.5, 2, 1900);
+		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
+
+		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
+
+		verify(ingredientRecommendationService).generateTodayRecommendation(USER_ID, skinAnalysis);
+	}
+
+	@Test
+	void 추천_성분_생성이_실패해도_이미_계산된_루틴_저장에는_영향이_없다() {
+		// 요구사항: 성분 추천/제품 검색 실패가 기존 루틴 기능을 절대 깨뜨리면 안 된다.
+		mockUser(2000);
+		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
+		org.mockito.Mockito.doThrow(new RuntimeException("AI 실패"))
+				.when(ingredientRecommendationService).generateTodayRecommendation(any(), any());
+
+		Checkin checkin = checkin(6.5, 2, 1900);
+		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
+
+		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
+
+		List<Routine> saved = captureSavedRoutines();
+		assertThat(saved).hasSize(1); // 루틴은 정상적으로 저장됨
+	}
+
+	@Test
+	void 오늘의_루틴_조회_응답에_저장된_추천_성분과_제품이_함께_담긴다() {
+		when(checkinRepository.existsByUserIdAndCheckedDate(USER_ID, LocalDate.now())).thenReturn(true);
+		when(routineRepository.countByUserIdAndRoutineDate(USER_ID, LocalDate.now())).thenReturn(0L);
+		when(routineRepository.countByUserIdAndRoutineDateAndIsCompletedTrue(USER_ID, LocalDate.now())).thenReturn(0L);
+		when(routineRepository.findAllByUserIdAndRoutineDate(USER_ID, LocalDate.now())).thenReturn(List.of());
+
+		var ingredient = new com.sangmyungyaho.barocare.routine.dto.IngredientRecommendationDto.IngredientItem("판테놀", "진정과 보습에 도움을 줄 수 있습니다.");
+		var product = new com.sangmyungyaho.barocare.routine.dto.IngredientRecommendationDto.ProductItem(
+				"라로슈포제", "시카플라스트 밤 B5+", "판테놀", "추천 성분인 판테놀과 관련된 실제 제품입니다.", "https://www.laroche-posay.co.kr/product/a");
+		when(ingredientRecommendationService.getTodayRecommendation(USER_ID))
+				.thenReturn(new IngredientRecommendationService.TodayRecommendation(List.of(ingredient), List.of(product)));
+
+		var response = routineService.getTodayRoutines(USER_ID);
+
+		assertThat(response.recommendedIngredients()).containsExactly(ingredient);
+		assertThat(response.recommendedProducts()).containsExactly(product);
+	}
+
+	@Test
+	void 추천이_아직_생성되지_않았으면_빈_배열을_반환한다() {
+		when(checkinRepository.existsByUserIdAndCheckedDate(USER_ID, LocalDate.now())).thenReturn(false);
+		when(routineRepository.countByUserIdAndRoutineDate(USER_ID, LocalDate.now())).thenReturn(0L);
+		when(routineRepository.countByUserIdAndRoutineDateAndIsCompletedTrue(USER_ID, LocalDate.now())).thenReturn(0L);
+		when(routineRepository.findAllByUserIdAndRoutineDate(USER_ID, LocalDate.now())).thenReturn(List.of());
+		// setUp()의 기본 스텁(TodayRecommendation.EMPTY)을 그대로 사용.
+
+		var response = routineService.getTodayRoutines(USER_ID);
+
+		assertThat(response.recommendedIngredients()).isEmpty();
+		assertThat(response.recommendedProducts()).isEmpty();
+	}
+
+	@Test
 	void 오늘자_루틴이_이미_있으면_재생성하지_않는다() {
 		// 멱등성: 같은 날 피부 분석 API가 여러 번 호출돼도(재분석 등) 루틴이 중복 생성되면 안 된다.
 		when(routineRepository.existsByUserIdAndRoutineDate(USER_ID, LocalDate.of(2026, 8, 10))).thenReturn(true);
@@ -186,7 +260,7 @@ class RoutineServiceTest {
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
 		verify(routineRepository, never()).saveAll(any());
-		verifyNoInteractions(userRepository, reportService);
+		verifyNoInteractions(userRepository, reportService, ingredientRecommendationService);
 	}
 
 	private void mockUser(int waterGoalMl) {

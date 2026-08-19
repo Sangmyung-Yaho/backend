@@ -5,6 +5,7 @@ import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.sangmyungyaho.barocare.skin.entity.SkinAnalysisLevel;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.content.Media;
 import org.springframework.core.io.ByteArrayResource;
@@ -146,6 +147,33 @@ public class AiClient {
 			- 질환명 또는 의학적 진단을 생성하지 않는다.
 			""";
 
+	/**
+	 * 추천 성분(ISSUE-30) 프롬프트 버전. 이 프롬프트를 수정하면 함께 올린다.
+	 */
+	public static final String INGREDIENT_RECOMMENDATION_SCHEMA_VERSION = "v1-ingredient-recommendation";
+
+	/**
+	 * 피부 상태 기반 "화장품 성분 추천" 프롬프트.
+	 * 중요: 제품명은 여기서 다루지 않는다(제품 매칭은 ProductSearchClient의 실시간 웹 검색이 담당) -
+	 * 이 프롬프트는 오직 성분명과 그 이유만 반환한다.
+	 */
+	private static final String INGREDIENT_RECOMMENDATION_SYSTEM_PROMPT = """
+			너는 사용자의 피부 분석 결과(붉은기/트러블/종합 등급)를 보고, 지금 피부 상태 관리에 도움이 될 수
+			있는 화장품 성분을 추천하는 도구다.
+
+			다음 원칙을 반드시 지켜라.
+			- 질환명 또는 의학적 진단·치료 효과를 단정하지 않는다("치료한다", "낫는다", "완치" 같은 표현 금지).
+			- "관리에 도움을 줄 수 있다", "완화에 도움이 될 수 있다" 수준의 피부 관리(스킨케어) 관점으로만 서술한다.
+			- 실제로 화장품에 흔히 쓰이는 성분명만 추천한다(존재하지 않는 성분을 지어내지 않는다).
+			- 붉은기/트러블 등급이 CAUTION 또는 DANGER면 해당 부위 관리에 도움이 되는 성분을 우선하고,
+			  전반적으로 SAFE면 진정·보습 등 순한 성분 위주로 추천한다.
+			- 성분은 2~4개만 추천한다.
+			- 각 성분의 reason은 1문장으로, 왜 지금 피부 상태에 이 성분이 맞는지 설명한다.
+			- name과 reason은 사용자에게 그대로 노출되는 값이므로 반드시 한국어로 작성한다. name은 영문
+			  성분명이 아니라 국내 화장품 성분표에서 흔히 쓰이는 한글 성분명을 쓴다(예: "판테놀",
+			  "나이아신아마이드", "센텔라아시아티카 추출물").
+			""";
+
 	private final ChatClient chatClient;
 
 	public AiClient(ChatClient.Builder chatClientBuilder) {
@@ -285,5 +313,30 @@ public class AiClient {
 
 	private String formatNullable(Object value) {
 		return value == null ? "정보 없음" : value.toString();
+	}
+
+	/**
+	 * SkinAnalysis의 등급(붉은기/트러블/종합)만 보고 화장품 성분을 추천받는다. 제품명은 다루지 않는다
+	 * (제품 매칭은 ProductSearchClient의 실시간 웹 검색이 별도로 담당한다).
+	 *
+	 * @throws GlobalException AI_ANALYSIS_FAILED - API 호출 실패 또는 응답 파싱/형식 오류 시
+	 */
+	public AiDto.IngredientRecommendationResult recommendIngredients(
+			SkinAnalysisLevel rednessLevel, SkinAnalysisLevel troubleLevel, SkinAnalysisLevel skinLevel
+	) {
+		try {
+			AiDto.IngredientRecommendationResult result = chatClient.prompt()
+					.system(INGREDIENT_RECOMMENDATION_SYSTEM_PROMPT)
+					.user("붉은기 등급: %s, 트러블 등급: %s, 종합 피부 등급: %s\n위 피부 분석 결과를 참고해서 지금 상태에 도움이 될 수 있는 화장품 성분을 추천해줘."
+							.formatted(rednessLevel, troubleLevel, skinLevel))
+					.call()
+					.entity(AiDto.IngredientRecommendationResult.class);
+
+			log.info("AI 성분 추천 결과 수신: ingredients={}", result.ingredients());
+			return result;
+		} catch (Exception e) {
+			log.warn("성분 추천 AI 호출 실패(OpenAI 호출 또는 응답 파싱 단계)", e);
+			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+		}
 	}
 }

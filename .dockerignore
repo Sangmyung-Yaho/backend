@@ -1,6 +1,12 @@
 .git
-.gradle
+.github
 .idea
-build/
-*.md
-.env*
+.env
+.env.*
+!.env.example
+# build/libs 안의 실행 jar는 Dockerfile이 COPY하므로 build 전체가 아니라
+# 그 외 산출물(classes, tmp, reports 등)만 제외한다.
+build/*
+!build/libs
+logs
+uploads

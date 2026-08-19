@@ -141,4 +141,19 @@ public class AiDto {
 			String description
 	) {
 	}
+
+	/**
+	 * 추천 성분(ISSUE-30). SkinAnalysis의 redness/trouble/skin 등급만 보고 화장품 성분을 추천한다 -
+	 * 제품명은 여기서 다루지 않는다(제품 매칭은 별도로 ProductSearchClient가 실시간 웹 검색으로 담당).
+	 */
+	public record IngredientRecommendationResult(
+			List<IngredientSuggestion> ingredients
+	) {
+	}
+
+	public record IngredientSuggestion(
+			String name,
+			String reason
+	) {
+	}
 }
