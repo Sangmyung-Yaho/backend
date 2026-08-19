@@ -196,6 +196,73 @@ class ReportServiceTest {
 		assertThat(capturedSkinChange.troubleDirection()).isEqualTo(ChangeDirection.DECREASED);
 	}
 
+	// ---------- 리포트 기준일(reportDate) = 체크인 checkedDate (타임존 버그 회귀 테스트) ----------
+	//
+	// 배경: reportDate가 과거 SkinAnalysis.analyzedAt(@CreationTimestamp)에서 파생되던 시절에는,
+	// 컨테이너/DB의 타임존 초기화 순서 문제로 KST 자정 근처(00:00~09:00)에 분석하면 analyzedAt이
+	// UTC 기준으로 생성되어 reportDate가 하루(또는 그 이상) 전 날짜로 저장되는 버그가 있었다.
+	// 지금은 reportDate가 todayCheckin.getCheckedDate()를 그대로 쓰므로, analyzedAt에 어떤 값이
+	// 들어있든(심지어 예전 버그를 그대로 재현한 값이든) reportDate는 영향을 받지 않아야 한다.
+	// 실제 자정을 기다리거나 시스템 시계를 조작하지 않고도 결정적으로 검증 가능한 이유가 이것이다.
+
+	@Test
+	void 자정_직전_체크인_8월19일_23시59분_이면_analyzedAt과_무관하게_리포트_날짜는_체크인_날짜를_따른다() {
+		Long todayId = 50L;
+		SkinAnalysis today = skinAnalysisWithId(todayId);
+		// 8/19 23:59 KST에 분석한 정상 케이스를 그대로 반영: analyzedAt도 8/19.
+		lenient().when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 19, 23, 59));
+		lenient().when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		lenient().when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, today.getAnalyzedAt()))
+				.thenReturn(Optional.empty());
+		when(reportRepository.findByCurrentSkinAnalysis_Id(todayId)).thenReturn(Optional.empty());
+		when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.of(2026, 8, 19));
+		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 19)))
+				.thenReturn(List.of());
+		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(List.of(), "요약"));
+		when(objectMapper.writeValueAsString(any())).thenReturn("[]");
+		ArgumentCaptor<Report> reportCaptor = ArgumentCaptor.forClass(Report.class);
+		when(reportRepository.save(reportCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		reportService.generateTodayReport(USER_ID, today, todayCheckin);
+
+		assertThat(reportCaptor.getValue().getReportDate()).isEqualTo(LocalDate.of(2026, 8, 19));
+		verify(checkinRepository).findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 19));
+	}
+
+	@Test
+	void 자정_직후_체크인_8월20일_00시01분_이면_analyzedAt이_타임존_버그로_전날짜여도_리포트_날짜는_체크인_날짜를_따른다() {
+		Long todayId = 51L;
+		SkinAnalysis today = skinAnalysisWithId(todayId);
+		// 수정 전 버그를 그대로 재현: KST 8/20 00:01에 분석했는데 UTC 기준으로 생성되어
+		// analyzedAt이 8/19로 저장된 상황(이중 보정 버그의 실제 관측값과 동일한 패턴).
+		// reportDate가 이 값의 영향을 받지 않는지가 이 테스트의 핵심이다.
+		lenient().when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 19, 15, 1));
+		lenient().when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		lenient().when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, today.getAnalyzedAt()))
+				.thenReturn(Optional.empty());
+		when(reportRepository.findByCurrentSkinAnalysis_Id(todayId)).thenReturn(Optional.empty());
+		when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+		// 체크인은 서비스가 실제로 하는 것처럼 자정을 넘긴 KST 기준 "오늘"(8/20)로 정상 저장되어 있다.
+		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.of(2026, 8, 20));
+		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 20)))
+				.thenReturn(List.of());
+		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(List.of(), "요약"));
+		when(objectMapper.writeValueAsString(any())).thenReturn("[]");
+		ArgumentCaptor<Report> reportCaptor = ArgumentCaptor.forClass(Report.class);
+		when(reportRepository.save(reportCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		reportService.generateTodayReport(USER_ID, today, todayCheckin);
+
+		// 버그가 남아있었다면(reportDate = analyzedAt.toLocalDate()) 8/19가 나왔을 것이다.
+		assertThat(reportCaptor.getValue().getReportDate()).isEqualTo(LocalDate.of(2026, 8, 20));
+		verify(checkinRepository).findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 20));
+	}
+
 	@Test
 	void AI가_후보_밖_요인을_causes에_포함시켜도_최종_응답에서는_제외된다() {
 		// GPT가 candidateFactors 지침을 어기고 정상(POOR 아님) 요인을 causes에 넣어도, ReportService가

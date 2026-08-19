@@ -5,6 +5,10 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
       MYSQL_DATABASE: barocare
+      # 컨테이너 기본값(UTC)이 아니라 Asia/Seoul로 고정 - NOW()/CURRENT_TIMESTAMP 등 MySQL 자체 시간
+      # 함수와 세션 타임존을 서비스 기준(KST)과 맞춘다. 기존 데이터는 변경되지 않는다(DATETIME 컬럼은
+      # 타임존 정보를 갖지 않아 저장된 값 자체는 그대로이고, 서버의 "현재 시각" 기준만 바뀐다).
+      TZ: Asia/Seoul
     ports:
       - "3306:3306"
     volumes:
