@@ -95,16 +95,21 @@ class RoutineServiceTest {
 		mockUser(2000);
 		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
 
-		// 수면 6.5h(저강도 구간), 수분 1900ml(목표 2000ml의 95%, 임계값 미달 아님 -> 미생성), 스트레스 2(구간 미달 -> 미생성)
+		// 수면 6.5h(개선 구간)만 정상 범위를 벗어나고, 수분 1900ml(목표 2000ml의 95%, 유지)/스트레스 2(유지)/
+		// 피부 SAFE(유지)는 전부 정상 범위 -> 4개 카테고리 전부 생성되지만 "유지" 3개 + "저강도" 1개.
 		Checkin checkin = checkin(6.5, 2, 1900);
 		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
 
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
 		List<Routine> saved = captureSavedRoutines();
-		assertThat(saved).hasSize(1);
+		assertThat(saved).hasSize(4);
 		assertThat(saved.get(0).getCategory()).isEqualTo("수면");
 		assertThat(saved.get(0).getIntensity()).isEqualTo("저강도");
+		// 나머지 3개는 전부 "유지" 루틴(정상 범위여도 루틴 자체는 항상 생성됨).
+		assertThat(saved.subList(1, 4)).extracting(Routine::getIntensity).containsOnly("유지");
+		assertThat(saved.subList(1, 4)).extracting(Routine::getCategory)
+				.containsExactlyInAnyOrder("피부", "수분", "스트레스");
 	}
 
 	@Test
@@ -112,13 +117,14 @@ class RoutineServiceTest {
 		mockUser(2000);
 		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of(ReportCauseFactor.SLEEP));
 
-		Checkin checkin = checkin(6.5, 2, 1900); // 수면만 "저강도"로 생성되는 조건
+		Checkin checkin = checkin(6.5, 2, 1900); // 수면만 "저강도"로 생성되는 조건, 나머지는 "유지"
 		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
 
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
 		List<Routine> saved = captureSavedRoutines();
-		assertThat(saved).hasSize(1);
+		assertThat(saved).hasSize(4);
+		// 격상되어 우선순위가 가장 높아지므로 정렬 결과 맨 앞에 온다.
 		assertThat(saved.get(0).getCategory()).isEqualTo("수면");
 		assertThat(saved.get(0).getIntensity()).isEqualTo("적극개입");
 	}
@@ -126,17 +132,19 @@ class RoutineServiceTest {
 	@Test
 	void 오늘_Report에_없는_요인의_저강도_루틴은_격상되지_않는다() {
 		mockUser(2000);
-		// STRESS만 원인으로 확인됨 -> 수면 루틴은 그대로 저강도 유지
+		// 수면(6.5h)과 스트레스(3) 둘 다 "저강도" 구간이지만, STRESS만 원인으로 확인됨
+		// -> 스트레스만 적극개입으로 격상되고 수면은 그대로 저강도 유지.
 		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of(ReportCauseFactor.STRESS));
 
-		Checkin checkin = checkin(6.5, 2, 1900);
+		Checkin checkin = checkin(6.5, 3, 1900);
 		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
 
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
 		List<Routine> saved = captureSavedRoutines();
-		assertThat(saved).hasSize(1);
-		assertThat(saved.get(0).getIntensity()).isEqualTo("저강도");
+		assertThat(saved).hasSize(4);
+		assertThat(findByCategory(saved, "스트레스").getIntensity()).isEqualTo("적극개입");
+		assertThat(findByCategory(saved, "수면").getIntensity()).isEqualTo("저강도");
 	}
 
 	@Test
@@ -150,24 +158,114 @@ class RoutineServiceTest {
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
 		List<Routine> saved = captureSavedRoutines();
-		assertThat(saved).hasSize(1);
-		assertThat(saved.get(0).getIntensity()).isEqualTo("저강도"); // 격상되지 않고 기존 규칙 그대로
+		assertThat(saved).hasSize(4);
+		assertThat(findByCategory(saved, "수면").getIntensity()).isEqualTo("저강도"); // 격상되지 않고 기존 규칙 그대로
 	}
 
 	@Test
-	void 오늘_SkinAnalysis가_DANGER면_피부_루틴이_최우선으로_추가된다() {
+	void 오늘_SkinAnalysis가_DANGER면_피부_루틴이_최우선으로_노출된다() {
 		mockUser(2000);
 		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
 
-		Checkin checkin = checkin(8.0, 1, 2000); // 다른 요인은 전부 양호 -> 피부 루틴만 생성
+		Checkin checkin = checkin(8.0, 1, 2000); // 다른 요인은 전부 정상 범위(유지) -> 피부만 "적극개입"
 		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.DANGER);
 
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
 		List<Routine> saved = captureSavedRoutines();
-		assertThat(saved).hasSize(1);
+		assertThat(saved).hasSize(4);
 		assertThat(saved.get(0).getCategory()).isEqualTo("피부");
 		assertThat(saved.get(0).getIntensity()).isEqualTo("적극개입");
+		assertThat(saved.subList(1, 4)).extracting(Routine::getIntensity).containsOnly("유지");
+	}
+
+	@Test
+	void 모든_지표가_정상_범위여도_유지_루틴이_생성되어_빈_배열이_되지_않는다() {
+		// 요구사항 핵심 케이스: 피부 SAFE, 수면 7h 이상, 수분 목표 100%, 스트레스 1 -> 전부 정상 범위.
+		mockUser(2000);
+		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
+
+		Checkin checkin = checkin(8.0, 1, 2000);
+		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
+
+		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
+
+		List<Routine> saved = captureSavedRoutines();
+		assertThat(saved).isNotEmpty();
+		assertThat(saved).hasSize(4);
+		assertThat(saved).extracting(Routine::getIntensity).containsOnly("유지");
+		assertThat(saved).extracting(Routine::getCategory)
+				.containsExactlyInAnyOrder("피부", "수면", "수분", "스트레스");
+	}
+
+	@Test
+	void 수면이_6시간_미만이면_강한_개선_루틴이_생성된다() {
+		mockUser(2000);
+		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
+
+		Checkin checkin = checkin(5.0, 1, 2000); // 수면만 5h(강한 개선 구간), 나머지는 정상
+		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
+
+		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
+
+		List<Routine> saved = captureSavedRoutines();
+		assertThat(saved.get(0).getCategory()).isEqualTo("수면");
+		assertThat(saved.get(0).getIntensity()).isEqualTo("적극개입");
+	}
+
+	@Test
+	void 수분이_목표량의_60퍼센트_미만이면_강한_개선_루틴이_생성된다() {
+		mockUser(2000);
+		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
+
+		Checkin checkin = checkin(8.0, 1, 1000); // 1000ml/2000ml = 50%(강한 개선 구간), 나머지는 정상
+		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
+
+		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
+
+		List<Routine> saved = captureSavedRoutines();
+		assertThat(saved.get(0).getCategory()).isEqualTo("수분");
+		assertThat(saved.get(0).getIntensity()).isEqualTo("적극개입");
+	}
+
+	@Test
+	void 스트레스가_4이상이면_강한_완화_루틴이_생성된다() {
+		mockUser(2000);
+		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
+
+		Checkin checkin = checkin(8.0, 4, 2000); // 스트레스만 4(강한 완화 구간), 나머지는 정상
+		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
+
+		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
+
+		List<Routine> saved = captureSavedRoutines();
+		assertThat(saved.get(0).getCategory()).isEqualTo("스트레스");
+		assertThat(saved.get(0).getIntensity()).isEqualTo("적극개입");
+	}
+
+	@Test
+	void 여러_위험_조건이_동시에_발생해도_우선순위대로_최대_4개까지만_반환된다() {
+		mockUser(2000);
+		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
+
+		// 피부 CAUTION(개선), 수면 5h(강한 개선), 수분 1900ml=95%(유지), 스트레스 4(강한 완화)
+		Checkin checkin = checkin(5.0, 4, 1900);
+		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.CAUTION);
+
+		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
+
+		List<Routine> saved = captureSavedRoutines();
+		assertThat(saved).hasSizeLessThanOrEqualTo(4); // 카테고리가 4개뿐이라 자연히 상한을 넘지 않는다.
+		assertThat(saved).hasSize(4);
+		// "강한 개선/완화"(적극개입) 2개가 "개선"(저강도) 1개, "유지" 1개보다 항상 먼저 온다.
+		assertThat(saved.get(0).getIntensity()).isEqualTo("적극개입");
+		assertThat(saved.get(1).getIntensity()).isEqualTo("적극개입");
+		assertThat(saved.get(2).getIntensity()).isEqualTo("저강도");
+		assertThat(saved.get(3).getIntensity()).isEqualTo("유지");
+		assertThat(saved.subList(0, 2)).extracting(Routine::getCategory)
+				.containsExactlyInAnyOrder("수면", "스트레스");
+		assertThat(saved.get(2).getCategory()).isEqualTo("피부");
+		assertThat(saved.get(3).getCategory()).isEqualTo("수분");
 	}
 
 	@Test
@@ -175,15 +273,13 @@ class RoutineServiceTest {
 		mockUser(2000);
 		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
 
-		// 수면 6.5h(저강도 구간)만 생성되는 조건(기존 "원인_후보가_없으면..." 테스트와 동일한 입력).
 		Checkin checkin = checkin(6.5, 2, 1900);
 		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
 
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
 		List<Routine> saved = captureSavedRoutines();
-		assertThat(saved).hasSize(1);
-		assertThat(saved.get(0).getEstimatedMinutes()).isNotNull().isPositive();
+		assertThat(saved).allSatisfy(routine -> assertThat(routine.getEstimatedMinutes()).isNotNull().isPositive());
 	}
 
 	@Test
@@ -213,7 +309,7 @@ class RoutineServiceTest {
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
 		List<Routine> saved = captureSavedRoutines();
-		assertThat(saved).hasSize(1); // 루틴은 정상적으로 저장됨
+		assertThat(saved).hasSize(4); // 루틴은 정상적으로 저장됨
 	}
 
 	@Test
@@ -290,5 +386,12 @@ class RoutineServiceTest {
 		ArgumentCaptor<List<Routine>> captor = ArgumentCaptor.forClass(List.class);
 		verify(routineRepository).saveAll(captor.capture());
 		return captor.getValue();
+	}
+
+	private Routine findByCategory(List<Routine> routines, String category) {
+		return routines.stream()
+				.filter(routine -> routine.getCategory().equals(category))
+				.findFirst()
+				.orElseThrow(() -> new AssertionError("category=" + category + " 루틴을 찾을 수 없습니다: " + routines));
 	}
 }
