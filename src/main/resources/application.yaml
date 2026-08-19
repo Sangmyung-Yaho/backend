@@ -74,3 +74,6 @@ app:
 logging:
   file:
     name: logs/barocare.log
+
+cors:
+  frontend-origin: ${CORS_FRONTEND_ORIGIN:}
