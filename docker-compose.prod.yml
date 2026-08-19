@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  backend:
+    # CI/CD 파이프라인에서 빌드 후 푸시하는 Docker 이미지 경로로 변경해야 합니다.
+    # 예: image: mydockerhub/barocare:latest
+    image: barocare-backend:latest
+    container_name: barocare-backend
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # 컨테이너 환경에서는 localhost 대신 docker-compose의 서비스명(redis)으로 접근해야 합니다.
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: barocare-redis
+    ports:
+      - "6379:6379"
+    restart: always
