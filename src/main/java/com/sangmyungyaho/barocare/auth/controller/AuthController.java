@@ -25,7 +25,13 @@ public class AuthController {
     private String frontendRedirectUri;
 
     @Value("${oauth2.frontend.allowed-origins}")
-    private List<String> allowedOrigins;
+    private String allowedOriginsRaw;
+
+    private List<String> getAllowedOrigins() {
+        return java.util.Arrays.stream(allowedOriginsRaw.split(","))
+                .map(String::trim)
+                .toList();
+    }
 
     @Value("${oauth2.kakao.client-id}")
     private String kakaoClientId;
@@ -132,7 +138,7 @@ public class AuthController {
             );
 
             // 화이트리스트 검증: decoded URL이 허용된 origin으로 시작하는지 확인
-            for (String allowedOrigin : allowedOrigins) {
+            for (String allowedOrigin : getAllowedOrigins()) {
                 if (decoded.startsWith(allowedOrigin)) {
                     return decoded;
                 }
