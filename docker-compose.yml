@@ -18,6 +18,17 @@ services:
     volumes:
       - barocare-redis-data:/data
 
+  barocare:
+    image: shlee811/barocare:latest
+    container_name: barocare
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    depends_on:
+      - mysql
+      - redis
+
 volumes:
   barocare-mysql-data:
   barocare-redis-data:
