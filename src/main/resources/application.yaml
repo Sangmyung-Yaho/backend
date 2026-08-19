@@ -34,7 +34,10 @@ spring:
       api-key: ${OPENAI_API_KEY}
       chat:
         options:
-          model: gpt-4o
+          # gpt-4o는 2026-02-16부로 OpenAI API에서 완전히 폐지되어 더 이상 호출할 수 없다(404).
+          # 후속 모델인 gpt-5.6 계열(Sol/Terra/Luna) 중 최상위 모델인 Sol로 교체.
+          # 필요 시 배포 환경에서 OPENAI_CHAT_MODEL로 override 가능.
+          model: ${OPENAI_CHAT_MODEL:gpt-5.6-sol}
 
   data:
     redis:
