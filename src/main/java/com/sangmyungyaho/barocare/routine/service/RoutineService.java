@@ -64,6 +64,7 @@ public class RoutineService {
     private final CheckinRepository checkinRepository;
     private final UserRepository userRepository;
     private final ReportService reportService;
+    private final IngredientRecommendationService ingredientRecommendationService;
 
     // userId+routineDate 기준 동시 생성 방지용 락(단일 인스턴스 기준). 같은 날 피부 분석이 짧은 간격으로
     // 여러 번 호출되더라도(예: 사용자가 재시도) 두 요청이 동시에 exists 체크를 통과해 루틴이 중복
@@ -84,13 +85,20 @@ public class RoutineService {
                 .map(RoutineDto.RoutineItem::from)
                 .toList();
 
+        // ISSUE-30: 저장된 오늘의 추천 성분/제품을 그대로 읽기만 한다(AI/웹검색 재호출 없음).
+        // 아직 생성 전이거나 생성이 실패했던 경우 IngredientRecommendationService가 빈 값을 돌려준다.
+        IngredientRecommendationService.TodayRecommendation recommendation =
+                ingredientRecommendationService.getTodayRecommendation(userId);
+
         return new RoutineResponseDto(
                 isCheckinCompleted,
                 false, // isGenerating은 사용하지 않는다(항상 false).
                 totalCount,
                 completedCount,
                 todayProgressPercent,
-                routineItems
+                routineItems,
+                recommendation.ingredients(),
+                recommendation.products()
         );
     }
 
@@ -169,6 +177,18 @@ public class RoutineService {
             generatedRoutines.sort(Comparator.comparing(Routine::getIntensity).reversed());
 
             routineRepository.saveAll(generatedRoutines);
+
+            // ISSUE-30: 추천 성분/제품 생성. 규칙 기반 루틴 생성 자체와는 완전히 별개 기능이므로,
+            // 여기서 어떤 예외가 나도(AI 실패, 웹검색 실패, 예상치 못한 버그 등) 위에서 이미 저장된
+            // 루틴에는 전혀 영향이 없어야 한다 - escalateRoutinesByCauseAnalysis와 동일한 방어 철학.
+            // (IngredientRecommendationService 내부에서도 AI/웹검색 각각의 실패를 흡수하지만, 이 바깥쪽
+            // catch는 그 흡수 로직 자체의 버그까지 포함한 최종 안전장치다.)
+            try {
+                ingredientRecommendationService.generateTodayRecommendation(userId, todaySkinAnalysis);
+            } catch (RuntimeException e) {
+                log.warn("추천 성분/제품 생성 실패(루틴 생성 자체에는 영향 없음): userId={}, skinAnalysisId={}",
+                        userId, todaySkinAnalysis.getId(), e);
+            }
         }
     }
 
