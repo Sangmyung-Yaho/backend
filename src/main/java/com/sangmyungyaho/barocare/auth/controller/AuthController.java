@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
+import java.util.List;
 
 @Tag(name = "Auth", description = "소셜 로그인 및 인증 관련 API")
 @RestController
@@ -22,6 +23,9 @@ public class AuthController {
 
     @Value("${oauth2.frontend.redirect-uri}")
     private String frontendRedirectUri;
+
+    @Value("${oauth2.frontend.allowed-origins}")
+    private List<String> allowedOrigins;
 
     @Value("${oauth2.kakao.client-id}")
     private String kakaoClientId;
@@ -43,26 +47,40 @@ public class AuthController {
     @GetMapping("/oauth/{provider}")
     public void redirectToSocialLogin(
             @PathVariable String provider,
+            @RequestParam(value = "redirect_to", required = false) String redirectTo,
             HttpServletResponse response) throws IOException {
+
+        // redirect_to를 state 파라미터에 담아 콜백에서 꺼내 쓴다
+        String state = "";
+        if (redirectTo != null && !redirectTo.isBlank()) {
+            state = java.util.Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(redirectTo.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
 
         String redirectUrl;
 
         if ("kakao".equalsIgnoreCase(provider)) {
-            redirectUrl = UriComponentsBuilder
+            var builder = UriComponentsBuilder
                     .fromUriString("https://kauth.kakao.com/oauth/authorize")
                     .queryParam("response_type", "code")
                     .queryParam("client_id", kakaoClientId)
                     .queryParam("redirect_uri", kakaoRedirectUri)
-                    .queryParam("prompt", "login")
-                    .build().toUriString();
+                    .queryParam("prompt", "login");
+            if (!state.isEmpty()) {
+                builder.queryParam("state", state);
+            }
+            redirectUrl = builder.build().toUriString();
         } else if ("google".equalsIgnoreCase(provider)) {
-            redirectUrl = UriComponentsBuilder
+            var builder = UriComponentsBuilder
                     .fromUriString("https://accounts.google.com/o/oauth2/v2/auth")
                     .queryParam("response_type", "code")
                     .queryParam("client_id", googleClientId)
                     .queryParam("redirect_uri", googleRedirectUri)
-                    .queryParam("scope", "openid email profile")
-                    .build().toUriString();
+                    .queryParam("scope", "openid email profile");
+            if (!state.isEmpty()) {
+                builder.queryParam("state", state);
+            }
+            redirectUrl = builder.build().toUriString();
         } else {
             throw new com.sangmyungyaho.barocare.global.exception.GlobalException(com.sangmyungyaho.barocare.global.exception.ErrorCode.OAUTH_PROVIDER_NOT_SUPPORTED);
         }
@@ -80,11 +98,15 @@ public class AuthController {
     public void loginCallback(
             @PathVariable String provider,
             @RequestParam String code,
+            @RequestParam(value = "state", required = false) String state,
             HttpServletResponse response) throws IOException {
 
         LoginResponseDto loginResult = authService.login(provider, code);
 
-        String redirectUrl = UriComponentsBuilder.fromUriString(frontendRedirectUri)
+        // state에서 redirect_to 복원 → 화이트리스트 검증 → 통과 시 해당 주소로, 실패 시 기본값(.env)으로
+        String targetRedirectUri = resolveRedirectUri(state);
+
+        String redirectUrl = UriComponentsBuilder.fromUriString(targetRedirectUri)
                 .queryParam("accessToken", loginResult.getAccessToken())
                 .queryParam("refreshToken", loginResult.getRefreshToken())
                 .queryParam("isNewUser", loginResult.isNewUser())
@@ -92,6 +114,35 @@ public class AuthController {
                 .build().toUriString();
 
         response.sendRedirect(redirectUrl);
+    }
+
+    /**
+     * state 파라미터에서 redirect_to를 복원하고, 허용 목록(allowed-origins)에 포함된 주소인지 검증한다.
+     * 검증 실패 또는 state가 없으면 .env 기본 리다이렉트 URI를 반환한다.
+     */
+    private String resolveRedirectUri(String state) {
+        if (state == null || state.isBlank()) {
+            return frontendRedirectUri;
+        }
+
+        try {
+            String decoded = new String(
+                    java.util.Base64.getUrlDecoder().decode(state),
+                    java.nio.charset.StandardCharsets.UTF_8
+            );
+
+            // 화이트리스트 검증: decoded URL이 허용된 origin으로 시작하는지 확인
+            for (String allowedOrigin : allowedOrigins) {
+                if (decoded.startsWith(allowedOrigin)) {
+                    return decoded;
+                }
+            }
+
+            // 화이트리스트에 없는 주소면 기본값 사용
+            return frontendRedirectUri;
+        } catch (Exception e) {
+            return frontendRedirectUri;
+        }
     }
 
     @Operation(summary = "로그아웃", description = "Redis에 저장된 Refresh Token을 삭제하여 로그아웃 처리합니다.")
