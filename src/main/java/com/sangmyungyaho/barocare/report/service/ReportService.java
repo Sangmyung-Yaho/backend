@@ -6,6 +6,7 @@ import com.sangmyungyaho.barocare.checkin.entity.Checkin;
 import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
+import com.sangmyungyaho.barocare.global.text.UserFacingTextGuard;
 import com.sangmyungyaho.barocare.report.dto.ReportDto;
 import com.sangmyungyaho.barocare.report.entity.LifestyleFactorLevel;
 import com.sangmyungyaho.barocare.report.entity.Report;
@@ -35,7 +36,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Pattern;
 
 /**
  * 피부 변화 원인 분석 리포트.
@@ -67,18 +67,6 @@ public class ReportService {
 
 	// 분석 메인 화면(GET /api/v1/reports) - date/startDate/endDate가 전부 없을 때 기본으로 조회하는 기간.
 	private static final int DEFAULT_REPORT_LIST_DAYS = 30;
-
-	// IMPROVED/WORSENED/UNCHANGED/INCREASED/DECREASED/STABLE/GOOD/MODERATE/POOR/SAFE/CAUTION/DANGER -
-	// 전부 백엔드 내부 enum 이름이다. 사용자에게 보이는 문장에 이 토큰이 단어 단위로(대소문자 무관) 그대로
-	// 섞여 있으면 AI가 프롬프트 지침을 어긴 것으로 보고 거부한다(validateNoInternalStateLeak).
-	// \b(word boundary)가 아니라 "앞뒤에 영문 알파벳이 없다"는 부정 전후방탐색을 쓴다 - \b는 한글처럼
-	// \w(=[a-zA-Z0-9_])에 속하지 않는 문자와의 경계 판정이 JDK 버전에 따라 달라 이 프로젝트가 쓰는
-	// JDK 17에서는 "POOR이라"처럼 한글이 바로 붙은 경우 매치가 안 되는 문제가 실측으로 확인됐다
-	// (같은 패턴이 JDK 23에서는 매치됨 - java.util.regex의 버전별 동작 차이).
-	private static final Pattern INTERNAL_STATE_LEAK_PATTERN = Pattern.compile(
-			"(?<![A-Za-z])(IMPROVED|WORSENED|UNCHANGED|INCREASED|DECREASED|STABLE|GOOD|MODERATE|POOR|SAFE|CAUTION|DANGER)(?![A-Za-z])",
-			Pattern.CASE_INSENSITIVE
-	);
 
 	private final SkinAnalysisRepository skinAnalysisRepository;
 	private final CheckinRepository checkinRepository;
@@ -502,8 +490,11 @@ public class ReportService {
 		}
 	}
 
+	// 실제 정규식/매핑은 global.text.UserFacingTextGuard(공용, IngredientRecommendationService와도
+	// 공유)에 있다 - 예전에는 이 클래스가 자체 정규식 사본을 갖고 있었고, 추천 성분/제품 쪽은 아예 이
+	// 검증 자체가 없어서 매핑이 서로 어긋나는 문제가 있었다.
 	private void validateNoInternalStateLeak(String text, String fieldName) {
-		if (text != null && INTERNAL_STATE_LEAK_PATTERN.matcher(text).find()) {
+		if (UserFacingTextGuard.containsLeak(text)) {
 			log.warn("AI 응답에 내부 상태값이 그대로 노출되어 거부함: field={}, text={}", fieldName, text);
 			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
 		}
@@ -578,12 +569,31 @@ public class ReportService {
 		}
 	}
 
+	// 조회 응답 직전 최종 방어선(2차): 저장 시점에 이미 validateCauseAnalysisResult로 거른 데이터라도,
+	// 그 검증이 도입되기 전에 저장된 레거시 Report가 있을 수 있다(DB 마이그레이션 없이 처리) - 여기서
+	// 한 번 더 훑어 내부 상태값이 남아 있으면 자연어 한국어로 치환한다. name/description 둘 다 AI가
+	// 작성하는 자연어 필드다(factor/currentValue/unit/baselineValue/difference/baselineType은 전부
+	// Java가 계산한 구조화 값이라 대상이 아니다).
 	private List<ReportDto.PrimaryCause> parsePrimaryCauses(String primaryCausesJson) {
 		try {
-			return objectMapper.readValue(primaryCausesJson, new TypeReference<List<ReportDto.PrimaryCause>>() {
+			List<ReportDto.PrimaryCause> causes = objectMapper.readValue(primaryCausesJson, new TypeReference<List<ReportDto.PrimaryCause>>() {
 			});
+			return causes.stream().map(this::sanitizePrimaryCause).toList();
 		} catch (JacksonException e) {
 			throw new IllegalStateException("primary_causes 역직렬화에 실패했습니다.", e);
 		}
+	}
+
+	private ReportDto.PrimaryCause sanitizePrimaryCause(ReportDto.PrimaryCause cause) {
+		return new ReportDto.PrimaryCause(
+				cause.factor(),
+				UserFacingTextGuard.sanitize(cause.name()),
+				cause.currentValue(),
+				cause.unit(),
+				UserFacingTextGuard.sanitize(cause.description()),
+				cause.baselineValue(),
+				cause.difference(),
+				cause.baselineType()
+		);
 	}
 }

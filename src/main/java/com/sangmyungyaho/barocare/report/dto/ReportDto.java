@@ -1,6 +1,7 @@
 package com.sangmyungyaho.barocare.report.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.sangmyungyaho.barocare.global.text.UserFacingTextGuard;
 import com.sangmyungyaho.barocare.report.entity.BaselineType;
 import com.sangmyungyaho.barocare.report.entity.Report;
 import com.sangmyungyaho.barocare.report.entity.ReportCauseFactor;
@@ -41,7 +42,8 @@ public class ReportDto {
 
 		public static ReportListItem from(Report report) {
 			return new ReportListItem(
-					report.getId(), report.getReportDate(), report.getCurrentSkinAnalysis().getSkinLevel(), report.getSummary()
+					report.getId(), report.getReportDate(), report.getCurrentSkinAnalysis().getSkinLevel(),
+					UserFacingTextGuard.sanitize(report.getSummary())
 			);
 		}
 	}
@@ -183,7 +185,8 @@ public class ReportDto {
 					SkinChangeItem.of(report.getTroublePreviousScore(), report.getTroubleCurrentScore(), report.getTroubleStatus())
 			);
 			boolean hasPreviousAnalysis = report.getPreviousSkinAnalysis() != null;
-			return new Response(report.getId(), report.getReportDate(), skinChange, hasPreviousAnalysis, primaryCauses, report.getSummary());
+			return new Response(report.getId(), report.getReportDate(), skinChange, hasPreviousAnalysis, primaryCauses,
+					UserFacingTextGuard.sanitize(report.getSummary()));
 		}
 	}
 

@@ -6,17 +6,21 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
+import com.sangmyungyaho.barocare.global.text.UserFacingTextGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 실시간 웹 검색 기반 "관련 제품" 조회(ISSUE-30).
@@ -51,6 +55,13 @@ public class ProductSearchClient {
 
 	private static final int MAX_PRODUCTS = 3;
 
+	// 운영 로그에서 실측된 실패 원인: OpenAI가 gpt-5-nano의 조직 단위 분당 토큰 한도(TPM)를 순간적으로
+	// 초과시켜 429 Too Many Requests를 반환("Please try again in 441ms" 같은 아주 짧은 쿨다운을 응답에
+	// 직접 명시함 - 재시도하면 곧바로 풀리는 일시적 상황이다). 429만 딱 집어 한 번 재시도한다 - 다른
+	// 예외(401 인증, 응답 파싱 실패 등)는 재시도해도 결과가 달라지지 않으므로 그대로 즉시 실패 처리한다.
+	private static final int MAX_ATTEMPTS = 2;
+	private static final Duration RATE_LIMIT_RETRY_DELAY = Duration.ofSeconds(1);
+
 	private static final String SYSTEM_INSTRUCTIONS = """
 			너는 실제로 판매 중인 화장품을 웹 검색으로 찾아서 추천하는 도구다.
 
@@ -63,6 +74,19 @@ public class ProductSearchClient {
 			  페이지를 우선하고, 확실한 URL을 찾지 못한 제품은 제외한다.
 			- 의학적 치료 효과를 단정하지 않고, 피부 관리 관점에서만 이유를 설명한다.
 			- 결과는 최대 3개까지만 추천한다. 추천할 만한 제품이 없으면 빈 배열을 반환해도 된다.
+
+			[언어 규칙] 이 결과는 한국 사용자에게 그대로 노출된다. 검색 결과가 영문 페이지여도 아래 규칙을
+			반드시 지켜서 필드별로 다르게 처리해라.
+			- brand(브랜드명)는 공식 브랜드 표기를 그대로 쓴다(예: "ANUA", "Cetaphil", "라로슈포제"). 억지로
+			  한글로 바꾸지 않는다.
+			- name(제품명)은 국내에 정식 출시된 공식 한글 제품명이 검색으로 확인되면 그 한글 제품명을 쓴다.
+			  공식 한글 제품명을 확실히 확인할 수 없으면 임의로 번역해서 지어낸 제품명을 만들지 말고, 검색으로
+			  확인된 원래 표기(영문 등)를 그대로 유지한다.
+			- matchedIngredient(연결된 성분명)와 reason(추천 이유)은 반드시 자연스러운 한국어 문장/단어로
+			  작성한다. 검색 결과 원문이 영어여도 그 문장을 그대로 옮기지 말고 한국어로 번역해서 쓴다.
+			  matchedIngredient는 국내 화장품 성분표에서 흔히 쓰이는 한글 성분명을 쓴다
+			  (예: Panthenol → 판테놀, Centella Asiatica Leaf Extract → 병풀잎추출물, Allantoin → 알란토인,
+			  Ceramide NP → 세라마이드 NP).
 			- 다른 설명 없이 아래 형식의 JSON 배열만 출력한다(마크다운 코드블록도 쓰지 않는다):
 			  [{"brand": "...", "name": "...", "matchedIngredient": "...", "reason": "...", "productUrl": "..."}]
 			""";
@@ -86,36 +110,67 @@ public class ProductSearchClient {
 	}
 
 	/**
-	 * 추천 성분명 목록을 근거로 실제 판매 중인 제품을 웹에서 검색해 최대 3개까지 반환한다.
+	 * 추천 성분명 목록을 근거로 실제 판매 중인 제품을 웹에서 검색해 최대 3개까지 반환한다. 검색은 됐지만
+	 * (parsed) 필수 필드 검증을 통과한 제품이 하나도 없으면(valid 0건) 예외가 아니라 빈 리스트를 그대로
+	 * 반환한다 - "검증되지 않은 제품을 억지로 채우느니 빈 결과가 낫다"는 원칙이지 "0건은 실패"라는 뜻은
+	 * 아니다(FAILED 처리는 IngredientRecommendationService가 예외를 받았을 때만 한다).
 	 *
-	 * @throws GlobalException AI_ANALYSIS_FAILED - API 호출 실패, 응답 파싱 실패, 유효한 제품이 하나도
-	 *                          없는 경우(모두 실패로 취급 - 검증되지 않은 제품을 반환하느니 빈 결과가 낫다)
+	 * 429 Too Many Requests(OpenAI TPM 한도 일시 초과)는 최대 {@value #MAX_ATTEMPTS}회까지 짧은 지연 후
+	 * 재시도한다 - OpenAI가 응답에 직접 명시하는 재시도 대기시간(보통 1초 미만)보다 넉넉하게 기다린다.
+	 * 그 외 예외(인증 실패, 응답 파싱 실패 등)는 재시도해도 결과가 바뀌지 않으므로 즉시 실패 처리한다.
+	 *
+	 * @throws GlobalException AI_ANALYSIS_FAILED - API 호출 실패(429 재시도 소진 포함) 또는 응답 파싱 실패
 	 */
 	public List<ProductSuggestion> search(List<String> ingredientNames) {
+		for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+			try {
+				return attemptSearch(ingredientNames);
+			} catch (HttpClientErrorException.TooManyRequests e) {
+				if (attempt >= MAX_ATTEMPTS) {
+					log.warn("제품 웹 검색 실패(OpenAI 429 Too Many Requests, {}회 재시도 모두 실패): ingredientNames={}",
+							MAX_ATTEMPTS, ingredientNames, e);
+					throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+				}
+				log.warn("제품 웹 검색 429 Too Many Requests(OpenAI TPM 한도 일시 초과) - {}ms 후 재시도({}/{}): ingredientNames={}",
+						RATE_LIMIT_RETRY_DELAY.toMillis(), attempt, MAX_ATTEMPTS, ingredientNames);
+				sleepQuietly(RATE_LIMIT_RETRY_DELAY);
+			} catch (Exception e) {
+				// 429 외 예외(인증 실패, 응답 파싱 실패 등)는 재시도해도 결과가 바뀌지 않으므로 즉시 실패 처리한다.
+				log.warn("제품 웹 검색 실패(OpenAI Responses API 호출 또는 응답 파싱 단계): ingredientNames={}", ingredientNames, e);
+				throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+			}
+		}
+		// 도달하지 않음(루프 마지막 반복에서 위 TooManyRequests 분기가 항상 return 또는 throw로 끝남).
+		throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+	}
+
+	private List<ProductSuggestion> attemptSearch(List<String> ingredientNames) throws Exception {
+		String requestJson = objectMapper.writeValueAsString(buildRequestBody(ingredientNames));
+
+		String responseBody = restClient.post()
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(requestJson)
+				.retrieve()
+				.body(String.class);
+
+		String outputText = extractOutputText(responseBody);
+		List<ProductSuggestion> parsed = objectMapper.readValue(cleanJson(outputText), new TypeReference<List<ProductSuggestion>>() {
+		});
+
+		List<ProductSuggestion> valid = parsed.stream()
+				.filter(this::isValid)
+				.limit(MAX_PRODUCTS)
+				.toList();
+
+		log.info("제품 웹 검색 완료: ingredientNames={}, 검색결과={}건, 유효={}건", ingredientNames, parsed.size(), valid.size());
+		return valid;
+	}
+
+	private void sleepQuietly(Duration duration) {
 		try {
-			String requestJson = objectMapper.writeValueAsString(buildRequestBody(ingredientNames));
-
-			String responseBody = restClient.post()
-					.contentType(MediaType.APPLICATION_JSON)
-					.body(requestJson)
-					.retrieve()
-					.body(String.class);
-
-			String outputText = extractOutputText(responseBody);
-			List<ProductSuggestion> parsed = objectMapper.readValue(cleanJson(outputText), new TypeReference<List<ProductSuggestion>>() {
-			});
-
-			parsed.forEach(p -> log.info("제품 검증 전: brand={}, name={}, matchedIngredient={}, reason={}, productUrl={}", p.brand(), p.name(), p.matchedIngredient(), p.reason(), p.productUrl()));
-
-			List<ProductSuggestion> valid = parsed.stream()
-					.filter(this::isValid)
-					.limit(MAX_PRODUCTS)
-					.toList();
-
-			log.info("제품 웹 검색 완료: ingredientNames={}, 검색결과={}건, 유효={}건", ingredientNames, parsed.size(), valid.size());
-			return valid;
-		} catch (Exception e) {
-			log.warn("제품 웹 검색 실패(OpenAI Responses API 호출 또는 응답 파싱 단계): ingredientNames={}", ingredientNames, e);
+			Thread.sleep(duration.toMillis());
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
 		}
 	}
@@ -182,14 +237,32 @@ public class ProductSearchClient {
 		return trimmed.trim();
 	}
 
+	// 한글이 한 글자도 없으면(완성형 한글 유니코드 블록 기준) 프롬프트의 [언어 규칙]을 어기고 영어 문장/성분명을
+	// 그대로 반환한 것으로 본다. brand/name은 공식 표기가 원래 영문일 수 있어(요구사항 1/2) 이 검사 대상이
+	// 아니다 - matchedIngredient/reason만 "반드시 한국어"가 절대 규칙이라 여기서 최종 방어선으로 강제한다.
+	private static final Pattern HANGUL_PATTERN = Pattern.compile("[가-힣]");
+
+	private boolean containsHangul(String text) {
+		return text != null && HANGUL_PATTERN.matcher(text).find();
+	}
+
 	// 필수 필드가 비어 있거나 productUrl이 URL 형태가 아니면(검색으로 확인되지 않았을 가능성이 높음) 제외한다.
+	// brand/name/matchedIngredient/reason은 사용자에게 그대로 노출되는 자연어 필드이므로, LLM이 내부
+	// 상태값(IMPROVED/POOR 등)을 실수로 섞어 반환한 경우도 여기서 함께 걸러낸다(UserFacingTextGuard).
+	// matchedIngredient/reason은 추가로 한글 포함 여부까지 검사해 영어 그대로 노출되는 것을 막는다.
 	private boolean isValid(ProductSuggestion product) {
 		return StringUtils.hasText(product.brand())
 				&& StringUtils.hasText(product.name())
 				&& StringUtils.hasText(product.matchedIngredient())
 				&& StringUtils.hasText(product.reason())
 				&& StringUtils.hasText(product.productUrl())
-				&& product.productUrl().startsWith("http");
+				&& product.productUrl().startsWith("http")
+				&& !UserFacingTextGuard.containsLeak(product.brand())
+				&& !UserFacingTextGuard.containsLeak(product.name())
+				&& !UserFacingTextGuard.containsLeak(product.matchedIngredient())
+				&& !UserFacingTextGuard.containsLeak(product.reason())
+				&& containsHangul(product.matchedIngredient())
+				&& containsHangul(product.reason());
 	}
 
 	public record ProductSuggestion(

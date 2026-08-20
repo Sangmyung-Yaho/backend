@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
@@ -132,6 +133,27 @@ class IngredientRecommendationServiceTest {
 	}
 
 	@Test
+	void FAILED_상태_저장_자체가_예외를_던져도_비동기_메서드_밖으로_예외가_전파되지_않는다() {
+		// 회귀 테스트(PROCESSING 영구 고착 버그): 배포 환경에서 ingredientStatus/productStatus가
+		// PROCESSING에서 멈추는 현상의 원인이었다 - AI 호출은 실패해 FAILED로 되돌리려 했지만, 그
+		// "FAILED로 되돌리는 save()" 자체가 DB 일시 장애(커넥션 풀 고갈 등)로 예외를 던지면 그 예외가
+		// @Async 메서드 밖으로 새 나가 Spring 기본 핸들러가 조용히 삼켰다 - 이 경우 row는 그 직전에
+		// 마지막으로 성공한 PROCESSING 상태에 영구히 머문다. 지금은 이 save() 실패를 흡수해서 메서드가
+		// 예외 없이 정상 종료돼야 한다(=이후 어떤 이유로도 응답 스레드나 다른 로직에 영향을 주지 않음).
+		when(ingredientRecommendationRepository.findBySkinAnalysisId(SKIN_ANALYSIS_ID)).thenReturn(Optional.empty());
+		when(ingredientRecommendationRepository.save(any()))
+				.thenAnswer(invocation -> invocation.getArgument(0)) // find-or-create 최초 생성 저장 - 성공
+				.thenAnswer(invocation -> invocation.getArgument(0)) // PROCESSING 표시 저장 - 성공
+				.thenThrow(new RuntimeException("DB 커넥션 풀 고갈(일시 장애 시뮬레이션)")); // FAILED 표시 저장 - 실패
+		when(aiClient.recommendIngredients(any(), any(), any())).thenThrow(new RuntimeException("AI 실패"));
+
+		assertThatCode(() -> service.generateTodayRecommendation(USER_ID, skinAnalysis()))
+				.doesNotThrowAnyException();
+
+		verifyNoInteractions(productSearchClient);
+	}
+
+	@Test
 	void AI가_성분_reason에_영어_상태값을_그대로_반환하면_FAILED로_저장하고_제품_검색은_하지_않는다() {
 		// 프롬프트 지침을 어기고 GPT가 "POOR" 같은 내부 상태값을 reason에 그대로 섞어 반환한 상황을
 		// 시뮬레이션한다. 성분 추천 실패와 동일하게 취급되어(캐치되는 RuntimeException) 제품 검색도
@@ -203,6 +225,40 @@ class IngredientRecommendationServiceTest {
 
 		assertThat(result.status()).isEqualTo(RecommendationStatus.COMPLETED);
 		assertThat(result.ingredients()).containsExactly(ingredient);
+	}
+
+	@Test
+	void getIngredientStatus는_레거시_저장데이터에_내부_상태값이_남아있어도_자연어로_치환해_반환한다() {
+		// 1차 방어선 도입 이전에 저장된 레거시 ingredients-json을 흉내낸다 - 조회 시점
+		// (UserFacingTextGuard.sanitize)에서 걸러져야 한다.
+		IngredientRecommendation saved = new IngredientRecommendation(USER_ID, SKIN_ANALYSIS_ID, LocalDate.now());
+		saved.completeIngredients("ingredients-json");
+		when(ingredientRecommendationRepository.findBySkinAnalysisId(SKIN_ANALYSIS_ID)).thenReturn(Optional.of(saved));
+		var legacyIngredient = new IngredientRecommendationDto.IngredientItem("판테놀", "피부 상태가 POOR로 판정되어 CAUTION이 필요합니다.");
+		when(objectMapper.readValue(eq("ingredients-json"), org.mockito.ArgumentMatchers.<tools.jackson.core.type.TypeReference<List<IngredientRecommendationDto.IngredientItem>>>any()))
+				.thenReturn(List.of(legacyIngredient));
+
+		var result = service.getIngredientStatus(SKIN_ANALYSIS_ID);
+
+		assertThat(result.ingredients()).hasSize(1);
+		assertThat(result.ingredients().get(0).reason()).isEqualTo("피부 상태가 부족로 판정되어 주의이 필요합니다.");
+	}
+
+	@Test
+	void getProductStatus는_레거시_저장데이터에_내부_상태값이_남아있어도_자연어로_치환해_반환한다() {
+		IngredientRecommendation saved = new IngredientRecommendation(USER_ID, SKIN_ANALYSIS_ID, LocalDate.now());
+		saved.completeProducts("products-json");
+		when(ingredientRecommendationRepository.findBySkinAnalysisId(SKIN_ANALYSIS_ID)).thenReturn(Optional.of(saved));
+		var legacyProduct = new IngredientRecommendationDto.ProductItem(
+				"라로슈포제", "시카플라스트 밤 B5+", "판테놀", "DANGER 수준의 피부에도 SAFE합니다.", "https://example.com/a");
+		when(objectMapper.readValue(eq("products-json"), org.mockito.ArgumentMatchers.<tools.jackson.core.type.TypeReference<List<IngredientRecommendationDto.ProductItem>>>any()))
+				.thenReturn(List.of(legacyProduct));
+
+		var result = service.getProductStatus(SKIN_ANALYSIS_ID);
+
+		assertThat(result.products()).hasSize(1);
+		assertThat(result.products().get(0).reason()).isEqualTo("위험 수준의 피부에도 안전합니다.");
+		assertThat(result.products().get(0).productUrl()).isEqualTo("https://example.com/a"); // URL은 치환 대상이 아니다
 	}
 
 	@Test

@@ -1,6 +1,7 @@
 package com.sangmyungyaho.barocare.routine.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.sangmyungyaho.barocare.global.text.UserFacingTextGuard;
 import com.sangmyungyaho.barocare.routine.entity.Routine;
 
 import java.util.List;
@@ -19,7 +20,11 @@ public class RoutineDto {
 			return new RoutineItem(
 					routine.getId(),
 					routine.getCategory(),
-					routine.getTitle(),
+					// title은 사용자에게 그대로 노출되는 자연어 문구다. 현재는 RoutineService의 하드코딩된
+					// 한국어 템플릿에서만 채워지지만, 내부 상태값이 섞여 들어가는 회귀를 막기 위해
+					// 방어적으로 sanitize를 거친다(category/intensity는 자연어 문장이 아니라 구조화된
+					// 분류값이라 대상이 아니다).
+					UserFacingTextGuard.sanitize(routine.getTitle()),
 					routine.getIntensity(),
 					routine.isCompleted(),
 					routine.getEstimatedMinutes()
