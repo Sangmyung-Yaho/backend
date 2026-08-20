@@ -31,6 +31,19 @@ public interface ImageStorageService {
 	Optional<byte[]> load(String directory, String storedFileName);
 
 	/**
+	 * 저장된 이미지 파일을 삭제한다.
+	 * 파일이 이미 없어도 예외를 던지지 않고 false를 반환한다(멱등하게 동작).
+	 * IO 오류 등 진짜 실패는 {@link #load}와 동일하게 unchecked 예외로 전파하므로,
+	 * 삭제 실패가 호출부(예: 분석 결과 저장)를 막으면 안 되는 곳에서는 호출자가 try/catch로
+	 * 감싸고 로그만 남긴 뒤 흡수해야 한다.
+	 *
+	 * @param directory      저장 하위 경로(예: "skin-images")
+	 * @param storedFileName 저장소 내부 파일명
+	 * @return 실제로 파일을 지웠으면 true, 애초에 파일이 없었으면 false
+	 */
+	boolean delete(String directory, String storedFileName);
+
+	/**
 	 * 저장 결과.
 	 *
 	 * @param storedFileName 저장소 내부에서 사용하는 실제 파일명(추후 삭제/S3 키 참조용)

@@ -17,9 +17,13 @@ import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -28,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -62,7 +67,25 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional // 테스트마다 별도 트랜잭션으로 감싸 종료 시 롤백 - 실행 중인 개발 DB를 오염시키지 않는다.
+// 추천 성분/제품 생성(IngredientRecommendationService.generateTodayRecommendation)이 @Async로
+// 백그라운드 스레드풀에서 실행된다(POST /skin-analyses 응답 지연 개선 - 원인 리포트/오늘의 루틴은
+// 다시 동기로 되돌아갔으므로 이제 이 부분만 해당). 그런데 이 테스트는 위 @Transactional로 테스트당
+// 하나의 트랜잭션/커넥션을 공유하며 끝나면 롤백한다 - 만약 실제 스레드풀 실행기를 그대로 쓰면,
+// 백그라운드 스레드는 별도 커넥션에서 실행되어 이 테스트가 아직 커밋하지 않은 체크인/피부분석 데이터를
+// 볼 수 없다(트랜잭션 격리). 그래서 아래 SyncAsyncTestConfig로 이 테스트 컨텍스트에서만
+// "recommendationExecutor" 빈을 동기 실행기로 교체해, 운영 코드(@Async 애노테이션)는 그대로 두고
+// 테스트에서는 같은 스레드/트랜잭션 안에서 즉시 실행되게 한다.
+@TestPropertySource(properties = "spring.main.allow-bean-definition-overriding=true")
 class UserFlowE2ETest {
+
+	@TestConfiguration
+	static class SyncAsyncTestConfig {
+
+		@Bean(name = "recommendationExecutor")
+		Executor recommendationExecutor() {
+			return new SyncTaskExecutor();
+		}
+	}
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -176,6 +199,22 @@ class UserFlowE2ETest {
 				.andExpect(jsonPath("$.data.is_baseline").value(true))
 				.andExpect(jsonPath("$.data.previous_skin_analysis_id").doesNotExist())
 				.andExpect(jsonPath("$.data.redness_change_status").doesNotExist());
+
+		// 피부 분석 응답 속도 개선(추천 성분/제품 분리): 이 테스트는 aiClient.recommendIngredients()를
+		// 스텁하지 않으므로(다른 목적의 테스트라 의도적으로 비워둠) 백그라운드 추천 생성은 실패로
+		// 끝난다 - 그래도 그 실패가 이미 위에서 확인한 피부 분석/리포트/루틴 생성 자체에 전혀 영향을
+		// 주지 않는다는 것과, 상태 조회 API가 최종 FAILED 상태를 정상적으로 반환한다는 것을 함께
+		// 검증한다(SyncAsyncTestConfig 덕분에 이 시점에는 이미 백그라운드 처리가 끝나 있다).
+		mockMvc.perform(get("/api/v1/skin-analyses/" + skinAnalysisId1 + "/ingredients").header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.status").value("FAILED"))
+				.andExpect(jsonPath("$.data.ingredients").isArray())
+				.andExpect(jsonPath("$.data.ingredients").isEmpty());
+		mockMvc.perform(get("/api/v1/skin-analyses/" + skinAnalysisId1 + "/products").header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.status").value("FAILED")) // 성분 추천이 실패해 제품 검색은 시도조차 되지 않음
+				.andExpect(jsonPath("$.data.products").isArray())
+				.andExpect(jsonPath("$.data.products").isEmpty());
 
 		// 1회차 리포트: 비교할 이전 분석이 없어도 원인 리포트가 생성돼야 한다(전제 #1) - 개인기준선(7건)은
 		// 이미 확보돼 있으므로 원인 판정은 개인 기준선 기준이지만, 피부 변화는 has_previous_analysis=false.
@@ -311,6 +350,12 @@ class UserFlowE2ETest {
 		// ===== 8. 다른 사용자는 이 데이터를 볼 수 없다 =====
 		String otherToken = createUserAndToken(null);
 		mockMvc.perform(get("/api/v1/skin-analyses/" + skinAnalysisId1).header("Authorization", "Bearer " + otherToken))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+		mockMvc.perform(get("/api/v1/skin-analyses/" + skinAnalysisId1 + "/ingredients").header("Authorization", "Bearer " + otherToken))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+		mockMvc.perform(get("/api/v1/skin-analyses/" + skinAnalysisId1 + "/products").header("Authorization", "Bearer " + otherToken))
 				.andExpect(status().isForbidden())
 				.andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
 		mockMvc.perform(get("/api/v1/checkins/today").header("Authorization", "Bearer " + otherToken))

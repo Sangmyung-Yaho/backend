@@ -1,6 +1,7 @@
 package com.sangmyungyaho.barocare.skin.controller;
 
 import com.sangmyungyaho.barocare.global.exception.ErrorResponse;
+import com.sangmyungyaho.barocare.routine.dto.IngredientRecommendationDto;
 import com.sangmyungyaho.barocare.skin.dto.SkinAnalysisDto;
 import com.sangmyungyaho.barocare.skin.service.SkinAnalysisService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -183,5 +184,119 @@ public class SkinAnalysisController {
 		Long userId = Long.parseLong(userDetails.getUsername());
 		SkinAnalysisDto.DetailResponse response = skinAnalysisService.getDetail(userId, skinAnalysisId);
 		return org.springframework.http.ResponseEntity.ok(com.sangmyungyaho.barocare.global.response.ApiResponse.success("피부 분석 상세 정보를 조회했습니다.", response));
+	}
+
+	@Operation(
+			summary = "추천 성분 조회",
+			description = "피부 분석 완료 직후 백그라운드에서 시작된 추천 성분 생성 작업의 상태와(완료됐다면) 결과를 조회한다. "
+					+ "이 GET 요청 자체는 새로운 OpenAI 호출을 시작하지 않는다 - 이미 저장된 상태만 그대로 반환한다. "
+					+ "status가 PENDING/PROCESSING이면 아직 준비되지 않은 것이고, COMPLETED면 ingredients가 채워지고, "
+					+ "FAILED면 이번 분석에 대해서는 더 이상 재시도되지 않는다(다음 피부 분석 때 새로 시작됨)."
+	)
+	@ApiResponses({
+			@ApiResponse(
+					responseCode = "200", description = "조회 성공(상태값과 함께 반환)",
+					content = @Content(
+							schema = @Schema(implementation = IngredientRecommendationDto.IngredientStatusResponse.class),
+							examples = {
+									@ExampleObject(
+											name = "완료됨",
+											value = "{\"status\":\"COMPLETED\",\"ingredients\":[{\"name\":\"판테놀\",\"reason\":\"진정과 보습에 도움을 줄 수 있습니다.\"}]}"
+									),
+									@ExampleObject(
+											name = "생성 중",
+											value = "{\"status\":\"PROCESSING\",\"ingredients\":[]}"
+									)
+							}
+					)
+			),
+			@ApiResponse(
+					responseCode = "403", description = "다른 사용자의 피부 분석입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "FORBIDDEN",
+									value = "{\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"해당 리소스에 접근할 권한이 없습니다.\"}}"
+							)
+					)
+			),
+			@ApiResponse(
+					responseCode = "404", description = "존재하지 않는 피부 분석입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "SKIN_ANALYSIS_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
+							)
+					)
+			)
+	})
+	@GetMapping("/api/v1/skin-analyses/{skinAnalysisId}/ingredients")
+	public org.springframework.http.ResponseEntity<com.sangmyungyaho.barocare.global.response.ApiResponse<IngredientRecommendationDto.IngredientStatusResponse>> getIngredientRecommendation(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
+			@Parameter(description = "피부 분석 ID", example = "12")
+			@PathVariable Long skinAnalysisId
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		IngredientRecommendationDto.IngredientStatusResponse response =
+				skinAnalysisService.getIngredientRecommendationStatus(userId, skinAnalysisId);
+		return org.springframework.http.ResponseEntity.ok(com.sangmyungyaho.barocare.global.response.ApiResponse.success("추천 성분 상태를 조회했습니다.", response));
+	}
+
+	@Operation(
+			summary = "추천 제품 조회",
+			description = "피부 분석 완료 직후 백그라운드에서 시작된 추천 제품 생성 작업의 상태와(완료됐다면) 결과를 조회한다. "
+					+ "이 GET 요청 자체는 새로운 웹검색을 시작하지 않는다. 제품 추천은 추천 성분 생성이 먼저 끝나야 시작될 수 "
+					+ "있는 순차 의존 관계라(성분명을 검색 입력으로 쓰기 때문), 성분 추천이 FAILED면 제품도 함께 FAILED다."
+	)
+	@ApiResponses({
+			@ApiResponse(
+					responseCode = "200", description = "조회 성공(상태값과 함께 반환)",
+					content = @Content(
+							schema = @Schema(implementation = IngredientRecommendationDto.ProductStatusResponse.class),
+							examples = {
+									@ExampleObject(
+											name = "완료됨",
+											value = "{\"status\":\"COMPLETED\",\"products\":[{\"brand\":\"라로슈포제\",\"name\":\"시카플라스트 밤 B5+\","
+													+ "\"matchedIngredient\":\"판테놀\",\"reason\":\"관련 제품입니다.\",\"productUrl\":\"https://example.com/a\"}]}"
+									),
+									@ExampleObject(
+											name = "생성 중",
+											value = "{\"status\":\"PROCESSING\",\"products\":[]}"
+									)
+							}
+					)
+			),
+			@ApiResponse(
+					responseCode = "403", description = "다른 사용자의 피부 분석입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "FORBIDDEN",
+									value = "{\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"해당 리소스에 접근할 권한이 없습니다.\"}}"
+							)
+					)
+			),
+			@ApiResponse(
+					responseCode = "404", description = "존재하지 않는 피부 분석입니다.",
+					content = @Content(
+							schema = @Schema(implementation = ErrorResponse.class),
+							examples = @ExampleObject(
+									name = "SKIN_ANALYSIS_NOT_FOUND",
+									value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
+							)
+					)
+			)
+	})
+	@GetMapping("/api/v1/skin-analyses/{skinAnalysisId}/products")
+	public org.springframework.http.ResponseEntity<com.sangmyungyaho.barocare.global.response.ApiResponse<IngredientRecommendationDto.ProductStatusResponse>> getProductRecommendation(
+			@org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
+			@Parameter(description = "피부 분석 ID", example = "12")
+			@PathVariable Long skinAnalysisId
+	) {
+		Long userId = Long.parseLong(userDetails.getUsername());
+		IngredientRecommendationDto.ProductStatusResponse response =
+				skinAnalysisService.getProductRecommendationStatus(userId, skinAnalysisId);
+		return org.springframework.http.ResponseEntity.ok(com.sangmyungyaho.barocare.global.response.ApiResponse.success("추천 제품 상태를 조회했습니다.", response));
 	}
 }

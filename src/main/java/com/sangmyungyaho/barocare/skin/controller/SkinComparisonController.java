@@ -27,10 +27,11 @@ public class SkinComparisonController {
 
 	@Operation(
 			summary = "피부 사진 변화 비교",
-			description = "현재/이전 SkinAnalysis에 연결된 원본 이미지 두 장을 GPT Vision에 함께 전달해 "
-					+ "redness/trouble의 상대적 변화 방향(INCREASED/STABLE/DECREASED)만 비교한다. "
-					+ "SAFE/CAUTION/DANGER 등급을 다시 판정하지 않는다. "
-					+ "previous_skin_analysis_id가 없으면(최초 분석) GPT를 호출하지 않고 비교 결과 없이 즉시 반환한다. "
+			description = "현재/이전 SkinAnalysis에 이미 저장된 관찰값(redness/troubleLevel 및 세부 강도/밀도)을 "
+					+ "비교해 redness/trouble의 상대적 변화 방향(INCREASED/STABLE/DECREASED)을 계산한다. "
+					+ "원본 이미지 보관 정책(분석 완료 후 원본 삭제)에 따라 원본 이미지나 AI(GPT Vision) 호출에는 "
+					+ "의존하지 않는다. SAFE/CAUTION/DANGER 등급을 다시 판정하지 않는다. "
+					+ "previous_skin_analysis_id가 없으면(최초 분석) 비교 결과 없이 즉시 반환한다. "
 					+ "이미 계산된 (current, previous) 조합이면 재계산하지 않고 기존 결과를 재사용한다.\n\n"
 					+ "⚠️ current_skin_analysis_id / previous_skin_analysis_id는 POST /api/v1/skin-images 응답의 "
 					+ "skin_image_id가 아니라, POST /api/v1/skin-analyses 응답의 skin_analysis_id다. "
@@ -64,16 +65,6 @@ public class SkinComparisonController {
 							examples = @ExampleObject(
 									name = "SKIN_ANALYSIS_NOT_FOUND",
 									value = "{\"error\":{\"code\":\"SKIN_ANALYSIS_NOT_FOUND\",\"message\":\"존재하지 않는 피부 분석입니다.\"}}"
-							)
-					)
-			),
-			@ApiResponse(
-					responseCode = "502", description = "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.",
-					content = @Content(
-							schema = @Schema(implementation = ErrorResponse.class),
-							examples = @ExampleObject(
-									name = "AI_ANALYSIS_FAILED",
-									value = "{\"error\":{\"code\":\"AI_ANALYSIS_FAILED\",\"message\":\"AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요.\"}}"
 							)
 					)
 			)

@@ -125,6 +125,10 @@ public class RoutineService {
      *
      * @param report 방금 생성/재사용된 오늘 Report(원인 후보는 이 리포트의 primaryCauses를 그대로
      *               반영한다 - 재조회하지 않으므로 과거 리포트를 오늘 결과로 착각할 위험이 없다).
+     *
+     * 이전에는 이 메서드 끝에서 추천 성분/제품 생성(IngredientRecommendationService)까지 트리거했지만,
+     * POST /skin-analyses 응답 지연 개선으로 그 트리거는 SkinAnalysisService.analyzeSkin()으로 옮겨져
+     * 루틴 저장과 완전히 분리된 별도 백그라운드 작업이 됐다(더 이상 이 메서드가 관여하지 않는다).
      */
     @Transactional
     public void generateRoutines(Long userId, Checkin checkin, SkinAnalysis todaySkinAnalysis, Report report) {
@@ -164,18 +168,6 @@ public class RoutineService {
                     .toList();
 
             routineRepository.saveAll(finalRoutines);
-
-            // ISSUE-30: 추천 성분/제품 생성. 규칙 기반 루틴 생성 자체와는 완전히 별개 기능이므로,
-            // 여기서 어떤 예외가 나도(AI 실패, 웹검색 실패, 예상치 못한 버그 등) 위에서 이미 저장된
-            // 루틴에는 전혀 영향이 없어야 한다 - escalateRoutinesByCauseAnalysis와 동일한 방어 철학.
-            // (IngredientRecommendationService 내부에서도 AI/웹검색 각각의 실패를 흡수하지만, 이 바깥쪽
-            // catch는 그 흡수 로직 자체의 버그까지 포함한 최종 안전장치다.)
-            try {
-                ingredientRecommendationService.generateTodayRecommendation(userId, todaySkinAnalysis);
-            } catch (RuntimeException e) {
-                log.warn("추천 성분/제품 생성 실패(루틴 생성 자체에는 영향 없음): userId={}, skinAnalysisId={}",
-                        userId, todaySkinAnalysis.getId(), e);
-            }
         }
     }
 

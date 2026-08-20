@@ -2,15 +2,12 @@ package com.sangmyungyaho.barocare.skin.service;
 
 import com.sangmyungyaho.barocare.ai.client.AiClient;
 import com.sangmyungyaho.barocare.ai.dto.AiDto;
-import com.sangmyungyaho.barocare.checkin.entity.Checkin;
-import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.global.storage.ImageStorageService;
-import com.sangmyungyaho.barocare.report.entity.Report;
 import com.sangmyungyaho.barocare.report.entity.ReportChangeStatus;
-import com.sangmyungyaho.barocare.report.service.ReportService;
-import com.sangmyungyaho.barocare.routine.service.RoutineService;
+import com.sangmyungyaho.barocare.routine.dto.IngredientRecommendationDto;
+import com.sangmyungyaho.barocare.routine.service.IngredientRecommendationService;
 import com.sangmyungyaho.barocare.skin.dto.SkinAnalysisDto;
 import com.sangmyungyaho.barocare.skin.entity.ImageQualityRating;
 import com.sangmyungyaho.barocare.skin.entity.SkinAnalysis;
@@ -66,9 +63,8 @@ public class SkinAnalysisService {
 	private final AiClient aiClient;
 	private final SkinGradeRubric skinGradeRubric;
 	private final UserRepository userRepository;
-	private final CheckinRepository checkinRepository;
-	private final ReportService reportService;
-	private final RoutineService routineService;
+	private final SkinAnalysisFollowUpService skinAnalysisFollowUpService;
+	private final IngredientRecommendationService ingredientRecommendationService;
 
 	public SkinAnalysisDto.Response analyzeSkin(Long userId, SkinAnalysisDto.Request request) {
 		log.info("피부 분석 요청 시작: skinImageId={}", request.skinImageId());
@@ -90,7 +86,10 @@ public class SkinAnalysisService {
 		MimeType mimeType = resolveMimeType(skinImage.getStoredFileName());
 
 		log.info("OpenAI 관찰값 추출 요청 시작: skinImageId={}", request.skinImageId());
+		long visionStartMs = System.currentTimeMillis();
 		AiDto.SkinAnalysisResult result = aiClient.analyzeSkin(imageBytes, mimeType);
+		log.info("[SkinAnalysis] vision completed: {}ms (skinImageId={})",
+				System.currentTimeMillis() - visionStartMs, request.skinImageId());
 		validateResult(result);
 
 		// 피부타입 보정(개인화): 사용자의 skinType을 조회해 등급 판정에 반영한다.
@@ -119,42 +118,87 @@ public class SkinAnalysisService {
 		SkinAnalysis saved = skinAnalysisRepository.save(skinAnalysis);
 		SkinAnalysisDto.Response response = SkinAnalysisDto.Response.from(saved);
 
-		generateTodayReportAndRoutines(userId, saved);
+		// 분석 결과가 DB에 저장된 이후에만 원본 이미지를 지운다(정책: 원본은 분석 용도로만 임시 보관).
+		// 삭제 실패가 이미 끝난 분석 결과 저장을 되돌리면 안 되므로 별도로 흡수한다.
+		deleteOriginalImageQuietly(skinImage);
+
+		// 요구사항: "피부 분석 + 원인 분석 + 오늘의 루틴까지" 완료된 뒤에 응답한다 - 그래서 이 호출은
+		// 동기다(SkinAnalysisFollowUpService 참고, 예전에 이 전체를 @Async로 백그라운드 실행했던 걸
+		// 되돌림). 실패해도 이미 저장된 피부 분석 응답 자체는 항상 성공해야 하므로 예외는 흡수한다
+		// (CheckinService가 루틴 생성 실패를 흡수하던 것과 동일한 방어 철학).
+		try {
+			skinAnalysisFollowUpService.generateTodayReportAndRoutines(userId, saved);
+		} catch (RuntimeException e) {
+			log.warn("오늘 리포트/루틴 생성 실패(피부 분석 저장에는 영향 없음): userId={}, skinAnalysisId={}",
+					userId, saved.getId(), e);
+		}
+
+		// 추천 성분/제품 생성은 리포트/루틴과 달리 응답을 기다리지 않는다 - 이 응답이 나간 뒤에도 계속
+		// 백그라운드에서 진행되고, 클라이언트는 별도로 GET .../ingredients, .../products를 호출해
+		// 준비됐는지 확인한다("추천 버튼" 클릭 시가 아니라 분석 완료 직후 이미 생성이 시작되는 구조).
+		// initializeTodayRecommendation은 동기(PENDING row를 즉시 만들어 응답 직후 상태 조회가 404가
+		// 되지 않게 함)이고, generateTodayRecommendation은 @Async라 실제 OpenAI/웹검색 호출은 이
+		// 메서드가 반환된 뒤에도 계속 실행된다. 체크인 유무와 무관하게 항상 트리거한다 - 이 추천은
+		// 오늘 SkinAnalysis 등급만으로 계산되고 체크인/리포트/루틴 데이터에 의존하지 않기 때문이다.
+		try {
+			ingredientRecommendationService.initializeTodayRecommendation(userId, saved);
+			ingredientRecommendationService.generateTodayRecommendation(userId, saved);
+		} catch (RuntimeException e) {
+			// @Async 메서드라도 스레드풀 큐가 가득 찬 경우(TaskRejectedException 등) 작업이 시작되기도
+			// 전에 호출부에서 동기적으로 예외가 날 수 있다 - 이 경우에도 피부 분석 저장 응답 자체는
+			// 항상 성공해야 하므로 흡수한다.
+			log.warn("추천 성분/제품 생성 작업을 백그라운드로 넘기지 못함(피부 분석 저장에는 영향 없음): userId={}, skinAnalysisId={}",
+					userId, saved.getId(), e);
+		}
 
 		return response;
 	}
 
 	/**
-	 * 실제 사용자 플로우(Figma 기준): 체크인 저장 → 사진 업로드 → 피부 분석 → 오늘 원인 리포트 생성 →
-	 * 오늘의 루틴 생성. 피부 분석이 방금 끝난 시점에만 오늘 Report/Routine을 생성한다(체크인 저장
-	 * 시점에는 더 이상 생성하지 않는다 - 그때는 아직 오늘 피부 분석이 없어 직전 데이터를 쓰게 되는
-	 * 문제가 있었다).
-	 *
-	 * 오늘 체크인이 아직 없으면(정상적인 플로우라면 체크인이 먼저 끝나 있어야 하지만, 순서를 어기고
-	 * 사진부터 분석을 시도한 경우) 리포트/루틴을 만들 수 없으므로 건너뛴다 - 피부 분석 저장 자체는
-	 * 이미 끝났으므로 이 응답에는 영향이 없다.
-	 *
-	 * 리포트/루틴 생성 중 예상치 못한 오류(OpenAI 실패 등)가 나도 피부 분석 저장 응답 자체는 항상
-	 * 성공해야 하므로 예외를 흡수한다(CheckinService가 루틴 생성 실패를 흡수하던 것과 동일한 방어 철학).
+	 * GET /api/v1/skin-analyses/{skinAnalysisId}/ingredients 전용. 소유권 검증(getDetail과 동일한 규칙 -
+	 * 404/403)만 여기서 하고, 실제 상태/데이터 조회는 IngredientRecommendationService에 위임한다. 이
+	 * 메서드 자체는 새로운 AI 호출을 시작하지 않는다(순수 조회).
 	 */
-	private void generateTodayReportAndRoutines(Long userId, SkinAnalysis todaySkinAnalysis) {
-		Optional<Checkin> todayCheckin = checkinRepository.findByUserIdAndCheckedDate(userId, LocalDate.now());
-		if (todayCheckin.isEmpty()) {
-			log.info("오늘 체크인이 없어 오늘 리포트/루틴 생성을 건너뜀: userId={}, skinAnalysisId={}", userId, todaySkinAnalysis.getId());
-			return;
+	public IngredientRecommendationDto.IngredientStatusResponse getIngredientRecommendationStatus(Long userId, Long skinAnalysisId) {
+		verifyOwnership(userId, skinAnalysisId);
+		return ingredientRecommendationService.getIngredientStatus(skinAnalysisId);
+	}
+
+	/**
+	 * GET /api/v1/skin-analyses/{skinAnalysisId}/products 전용. getIngredientRecommendationStatus와 동일한 규칙.
+	 */
+	public IngredientRecommendationDto.ProductStatusResponse getProductRecommendationStatus(Long userId, Long skinAnalysisId) {
+		verifyOwnership(userId, skinAnalysisId);
+		return ingredientRecommendationService.getProductStatus(skinAnalysisId);
+	}
+
+	// getDetail()의 소유권 검증과 동일한 규칙(404 SKIN_ANALYSIS_NOT_FOUND / 403 FORBIDDEN)을 상태 조회
+	// 두 메서드가 공유한다.
+	private void verifyOwnership(Long userId, Long skinAnalysisId) {
+		SkinAnalysis analysis = skinAnalysisRepository.findById(skinAnalysisId)
+				.orElseThrow(() -> new GlobalException(ErrorCode.SKIN_ANALYSIS_NOT_FOUND));
+		if (!analysis.getUserId().equals(userId)) {
+			log.warn("추천 성분/제품 상태 조회 거부: 다른 사용자의 분석 - skinAnalysisId={}, ownerUserId={}, requestUserId={}",
+					skinAnalysisId, analysis.getUserId(), userId);
+			throw new GlobalException(ErrorCode.FORBIDDEN);
 		}
+	}
 
+	/**
+	 * 분석에 사용된 원본 이미지를 삭제한다. 이 시점은 이미 SkinAnalysis 저장이 끝난 뒤이므로,
+	 * 여기서 발생하는 어떤 예외도 밖으로 던지지 않고 로그만 남긴다(요구사항: 삭제 실패가 분석
+	 * 결과 저장 자체를 롤백시키면 안 된다). 파일이 원래 없었던 경우(false)도 실패가 아니라
+	 * 정상 케이스로 취급한다(멱등).
+	 */
+	private void deleteOriginalImageQuietly(SkinImage skinImage) {
 		try {
-			Report report = reportService.generateTodayReport(userId, todaySkinAnalysis, todayCheckin.get());
-			routineService.generateRoutines(userId, todayCheckin.get(), todaySkinAnalysis, report);
-
-			// 하루 활동 플로우 완료(체크인 → 피부 분석 → 리포트 → 루틴) → 스트릭 갱신
-			User user = userRepository.findById(userId)
-					.orElseThrow(() -> new GlobalException(ErrorCode.USER_NOT_FOUND));
-			user.recordActivity(LocalDate.now());
+			boolean deleted = imageStorageService.delete(STORAGE_DIRECTORY, skinImage.getStoredFileName());
+			log.info("원본 이미지 삭제 {}: skinImageId={}, storedFileName={}",
+					deleted ? "완료" : "생략(이미 없음)", skinImage.getId(), skinImage.getStoredFileName());
 		} catch (RuntimeException e) {
-			log.warn("오늘 리포트/루틴 생성 실패(피부 분석 저장에는 영향 없음): userId={}, skinAnalysisId={}",
-					userId, todaySkinAnalysis.getId(), e);
+			log.warn("원본 이미지 삭제 실패(분석 결과 저장에는 영향 없음, 다음 정리 배치에서 재시도 대상 아님 - 수동 확인 필요): "
+							+ "skinImageId={}, storedFileName={}",
+					skinImage.getId(), skinImage.getStoredFileName(), e);
 		}
 	}
 

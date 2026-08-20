@@ -43,9 +43,11 @@ public class ProductSearchClient {
 
 	private static final String RESPONSES_API_URL = "https://api.openai.com/v1/responses";
 
-	// web_search 도구를 지원하는 모델만 쓸 수 있다. AiClient(ChatClient)와 동일하게 gpt-5.6 계열 중
-	// 최상위 모델인 Sol을 사용한다 - 현재 사용량이 매우 적어 비용보다 검색·매칭 품질을 우선한다.
-	private static final String MODEL = "gpt-5.6-sol";
+	// web_search 도구를 지원하는 모델만 쓸 수 있다. 이 호출은 20초 타임아웃(AiHttpClientConfig) 안에
+	// 끝나야 하므로, AiClient(Vision/원인분석/성분추천)의 gpt-5.6-sol과 달리 여기서는 응답 속도가 빠른
+	// gpt-5-nano를 쓴다 - 제품명/URL 매칭은 검색 결과를 그대로 옮기는 단순 작업이라 상위 모델의 추론
+	// 품질이 크게 필요하지 않다. reasoning effort도 낮춰 지연을 추가로 줄인다(buildRequestBody 참고).
+	private static final String MODEL = "gpt-5-nano";
 
 	private static final int MAX_PRODUCTS = 3;
 
@@ -123,6 +125,12 @@ public class ProductSearchClient {
 		body.put("input", "다음 추천 성분과 관련된 실제 판매 중인 화장품을 웹에서 검색해서 추천해줘: " + String.join(", ", ingredientNames));
 		body.put("tools", List.of(Map.of("type", "web_search")));
 		body.put("tool_choice", "required"); // 검색 없이 지식만으로 답하는 걸 막기 위해 강제한다.
+		// gpt-5-nano는 reasoning 모델이라 effort를 올리면 추론에 시간을 더 쓴다. 이 호출은 검색 결과를
+		// 그대로 옮겨 담는 단순 매칭 작업이고 20초 타임아웃 안에 끝나야 하므로 낮게 유지한다.
+		// 주의: "minimal"은 web_search 도구와 함께 쓸 수 없다(OpenAI가 400 invalid_request_error로 거부 -
+		// 실제 호출로 확인함: "The following tools cannot be used with reasoning.effort 'minimal': web_search.").
+		// web_search와 병행 가능한 가장 낮은 단계인 "low"를 대신 사용한다.
+		body.put("reasoning", Map.of("effort", "low"));
 		return body;
 	}
 

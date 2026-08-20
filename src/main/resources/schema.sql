@@ -18,3 +18,10 @@
 ALTER TABLE report MODIFY COLUMN previous_skin_analysis_id BIGINT NULL;
 ALTER TABLE report MODIFY COLUMN redness_previous_score INT NULL;
 ALTER TABLE report MODIFY COLUMN trouble_previous_score INT NULL;
+
+-- 추천 성분/제품 백그라운드 생성(PENDING -> PROCESSING -> COMPLETED/FAILED 단계적 처리)으로 바뀌면서,
+-- ingredients_json/products_json은 이제 COMPLETED가 되기 전까지 값이 없을 수 있다(nullable로 매핑
+-- 변경). 위와 동일한 이유(Hibernate ddl-auto=update가 기존 NOT NULL 컬럼을 스스로 완화하지 못함)로
+-- 여기서도 명시적으로 완화한다. 이미 nullable인 컬럼에 다시 실행해도 안전하다(멱등).
+ALTER TABLE ingredient_recommendation MODIFY COLUMN ingredients_json TEXT NULL;
+ALTER TABLE ingredient_recommendation MODIFY COLUMN products_json TEXT NULL;

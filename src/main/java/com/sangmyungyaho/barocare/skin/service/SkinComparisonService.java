@@ -1,11 +1,9 @@
 package com.sangmyungyaho.barocare.skin.service;
 
-import com.sangmyungyaho.barocare.ai.client.AiClient;
-import com.sangmyungyaho.barocare.ai.dto.AiDto;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
-import com.sangmyungyaho.barocare.global.storage.ImageStorageService;
 import com.sangmyungyaho.barocare.skin.dto.SkinComparisonDto;
+import com.sangmyungyaho.barocare.skin.entity.ChangeDirection;
 import com.sangmyungyaho.barocare.skin.entity.SkinAnalysis;
 import com.sangmyungyaho.barocare.skin.entity.SkinComparison;
 import com.sangmyungyaho.barocare.skin.repository.SkinAnalysisRepository;
@@ -14,16 +12,21 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.util.MimeType;
-import org.springframework.util.MimeTypeUtils;
 
-import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 
 /**
  * 이전/현재 피부 사진 "변화" 비교(CHK-332). 단일 이미지 분석({@link SkinAnalysisService})과
  * {@link SkinGradeRubric}은 이 기능과 무관하며 변경하지 않는다.
+ *
+ * 원본 이미지 보관 정책 변경(분석 완료 후 원본 즉시 삭제)에 따라, 더 이상 GPT Vision에 원본 이미지
+ * 두 장을 다시 전달하는 방식으로 비교하지 않는다. 대신 각 SkinAnalysis에 이미 저장된 관찰값
+ * (redness/troubleLevel 및 그 세부 강도/밀도)만으로 변화 방향(INCREASED/STABLE/DECREASED)을
+ * 결정적으로 계산한다 - 원본 이미지가 이미 삭제된 상태여도 항상 동작한다.
+ *
+ * ReportService는 이 결과(SkinComparison.rednessChange/troubleChange)를 "있으면 쓰고 없으면 등급
+ * 변화로 대체 유도"하는 방식으로만 소비하므로(ReportService.java 참고), 계산 방식이 AI 기반에서
+ * 규칙 기반으로 바뀌어도 하위 소비자(Report/Routine/DTO)는 영향을 받지 않는다.
  */
 @Service
 @RequiredArgsConstructor
@@ -31,19 +34,8 @@ public class SkinComparisonService {
 
 	private static final Logger log = LoggerFactory.getLogger(SkinComparisonService.class);
 
-	// SkinImageService/SkinAnalysisService와 동일한 저장 하위 경로.
-	private static final String STORAGE_DIRECTORY = "skin-images";
-
-	private static final Map<String, MimeType> EXTENSION_MIME_TYPES = Map.of(
-			"jpg", MimeTypeUtils.IMAGE_JPEG,
-			"jpeg", MimeTypeUtils.IMAGE_JPEG,
-			"png", MimeTypeUtils.IMAGE_PNG
-	);
-
 	private final SkinAnalysisRepository skinAnalysisRepository;
 	private final SkinComparisonRepository skinComparisonRepository;
-	private final ImageStorageService imageStorageService;
-	private final AiClient aiClient;
 
 	/**
 	 * @return 비교 결과와, 이번 호출로 새로 계산/저장했는지 여부(컨트롤러가 201/200 결정에 사용)
@@ -68,50 +60,57 @@ public class SkinComparisonService {
 			return new Outcome(SkinComparisonDto.Response.from(existing.get()), false);
 		}
 
-		byte[] previousBytes = loadImageBytes(previous);
-		byte[] currentBytes = loadImageBytes(current);
-		MimeType previousMimeType = resolveMimeType(previous.getSkinImage().getStoredFileName());
-		MimeType currentMimeType = resolveMimeType(current.getSkinImage().getStoredFileName());
+		ChangeDirection rednessChange = determineRednessChange(current, previous);
+		ChangeDirection troubleChange = determineTroubleChange(current, previous);
 
-		log.info("OpenAI 비교 요청 시작: currentSkinAnalysisId={}, previousSkinAnalysisId={}", current.getId(), previous.getId());
-		AiDto.SkinComparisonResult result = aiClient.compareSkin(
-				previousBytes, previousMimeType, currentBytes, currentMimeType
-		);
-		validateResult(result);
-
-		log.info("비교 결과 계산 완료: currentSkinAnalysisId={}, previousSkinAnalysisId={}, redness={}, trouble={}",
-				current.getId(), previous.getId(), result.redness(), result.trouble());
+		log.info("비교 결과 계산 완료(저장된 관찰값 기반, 원본 이미지 미사용): "
+						+ "currentSkinAnalysisId={}, previousSkinAnalysisId={}, redness={}, trouble={}",
+				current.getId(), previous.getId(), rednessChange, troubleChange);
 
 		SkinComparison saved = skinComparisonRepository.save(
-				new SkinComparison(current, previous, result.redness(), result.trouble())
+				new SkinComparison(current, previous, rednessChange, troubleChange)
 		);
 		return new Outcome(SkinComparisonDto.Response.from(saved), true);
 	}
 
-	private void validateResult(AiDto.SkinComparisonResult result) {
-		if (result == null || result.redness() == null || result.trouble() == null) {
-			log.warn("AI 비교 결과 검증 실패: redness/trouble 누락 - {}", result);
-			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+	/**
+	 * 붉은기 변화 방향. 1차로 rednessLevel(SAFE/CAUTION/DANGER) ordinal 차이로 판단하고,
+	 * 두 분석의 레벨이 같으면 rednessMaxIntensity(MILD/MODERATE/SEVERE)로 세분화한다.
+	 */
+	private ChangeDirection determineRednessChange(SkinAnalysis current, SkinAnalysis previous) {
+		int levelDiff = current.getRednessLevel().ordinal() - previous.getRednessLevel().ordinal();
+		if (levelDiff != 0) {
+			return levelDiff > 0 ? ChangeDirection.INCREASED : ChangeDirection.DECREASED;
 		}
+		return compareByOrdinal(current.getRednessMaxIntensity(), previous.getRednessMaxIntensity());
 	}
 
-	private byte[] loadImageBytes(SkinAnalysis skinAnalysis) {
-		return imageStorageService.load(STORAGE_DIRECTORY, skinAnalysis.getSkinImage().getStoredFileName())
-				.orElseThrow(() -> new GlobalException(ErrorCode.SKIN_IMAGE_FILE_NOT_FOUND));
-	}
-
-	private MimeType resolveMimeType(String storedFileName) {
-		String extension = extractExtension(storedFileName).toLowerCase(Locale.ROOT);
-		MimeType mimeType = EXTENSION_MIME_TYPES.get(extension);
-		if (mimeType == null) {
-			throw new GlobalException(ErrorCode.SKIN_IMAGE_FILE_NOT_FOUND);
+	/**
+	 * 트러블 변화 방향. 1차로 troubleLevel ordinal 차이로 판단하고, 레벨이 같으면
+	 * troubleDensity(FEW/MANY)로 세분화한다.
+	 */
+	private ChangeDirection determineTroubleChange(SkinAnalysis current, SkinAnalysis previous) {
+		int levelDiff = current.getTroubleLevel().ordinal() - previous.getTroubleLevel().ordinal();
+		if (levelDiff != 0) {
+			return levelDiff > 0 ? ChangeDirection.INCREASED : ChangeDirection.DECREASED;
 		}
-		return mimeType;
+		return compareByOrdinal(current.getTroubleDensity(), previous.getTroubleDensity());
 	}
 
-	private String extractExtension(String fileName) {
-		int dotIndex = fileName.lastIndexOf('.');
-		return dotIndex >= 0 && dotIndex < fileName.length() - 1 ? fileName.substring(dotIndex + 1) : "";
+	// 세부 강도/밀도 값은 nullable(AI가 관찰하지 못하면 null)이므로, 둘 중 하나라도 없으면
+	// 판단 근거가 부족한 것으로 보고 STABLE로 처리한다(과대 해석 방지).
+	private <E extends Enum<E>> ChangeDirection compareByOrdinal(E current, E previous) {
+		if (current == null || previous == null) {
+			return ChangeDirection.STABLE;
+		}
+		int diff = current.ordinal() - previous.ordinal();
+		if (diff > 0) {
+			return ChangeDirection.INCREASED;
+		}
+		if (diff < 0) {
+			return ChangeDirection.DECREASED;
+		}
+		return ChangeDirection.STABLE;
 	}
 
 	public record Outcome(SkinComparisonDto.Response response, boolean created) {

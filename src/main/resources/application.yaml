@@ -32,6 +32,16 @@ spring:
   ai:
     openai:
       api-key: ${OPENAI_API_KEY}
+      # 기본값 60초 - Vision/원인분석/성분추천(AiClient) 세 호출 모두 이 값을 공유한다(하나의 OpenAI Java
+      # SDK 클라이언트를 같이 쓰기 때문). POST /skin-analyses 60초 초과 위험을 줄이기 위해 15초로 낮춘다.
+      # 주의: 이 프로퍼티는 request(전체 호출) 타임아웃만 지정하고 connect는 별도 기본값(1분)을 쓴다 -
+      # connect/read를 명시적으로 함께 낮추는 설정은 AiHttpClientConfig의 OpenAiHttpClientBuilderCustomizer
+      # 빈에서 한다(이 프로퍼티는 그 커스터마이저가 덮어쓰기 전까지의 기본값이자 문서화 목적을 겸함).
+      timeout: 15s
+      # 기본값 3(최대 4회 시도)인데, 재시도마다 최대 15초(위 timeout)에 근접한 지연이 누적되면
+      # POST /skin-analyses가 프록시/ALB의 60초 기본 idle timeout을 쉽게 넘긴다(504 원인 분석 결과).
+      # 재시도를 최소화해 이 누적 지연 가능성을 줄인다.
+      max-retries: 1
       chat:
         options:
           # gpt-4o는 2026-02-16부로 OpenAI API에서 완전히 폐지되어 더 이상 호출할 수 없다(404).
@@ -62,10 +72,13 @@ oauth2:
     redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:8080/api/v1/auth/oauth/google/callback}
   frontend:
     redirect-uri: ${FRONTEND_REDIRECT_URI:http://localhost:3000/oauth/success}
-    # 동적 리다이렉트 허용 주소 목록 (redirect_to 파라미터 화이트리스트)
-    allowed-origins:
-      - http://localhost:3000
-      - https://frontend-five-iota-84.vercel.app
+    # 동적 리다이렉트 허용 주소 목록 (redirect_to 파라미터 화이트리스트, 쉼표 구분).
+    # AuthController#allowedOrigins(List<String>)가 이 값을 @Value로 주입받는다 - Spring이 콤마로
+    # 구분된 문자열 프로퍼티를 List<String>으로 자동 분리해준다. YAML 리스트(- item) 형식으로 쓰면
+    # "oauth2.frontend.allowed-origins"라는 평탄한(flat) 프로퍼티 키 자체가 없어져(인덱스가 붙은
+    # allowed-origins[0]/[1]만 존재) @Value("${oauth2.frontend.allowed-origins}")가
+    # PlaceholderResolutionException으로 실패한다 - 그래서 반드시 이 콤마 문자열 형식을 유지해야 한다.
+    allowed-origins: ${OAUTH2_ALLOWED_ORIGINS:http://localhost:3000,https://frontend-five-iota-84.vercel.app}
 
 jwt:
   secret: ${JWT_SECRET}
@@ -77,6 +90,9 @@ app:
     local:
       base-dir: uploads
       url-prefix: /uploads
+    skin-image-cleanup:
+      # 분석 없이 방치된(미연결) 피부 이미지를 정리하는 배치 주기. 기본값: 매일 새벽 4시.
+      cron: "0 0 4 * * *"
 
 logging:
   file:

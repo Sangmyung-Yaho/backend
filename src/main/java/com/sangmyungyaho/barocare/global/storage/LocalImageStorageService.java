@@ -67,6 +67,16 @@ public class LocalImageStorageService implements ImageStorageService {
 		}
 	}
 
+	@Override
+	public boolean delete(String directory, String storedFileName) {
+		Path targetPath = baseDir.resolve(directory).resolve(storedFileName);
+		try {
+			return Files.deleteIfExists(targetPath);
+		} catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+	}
+
 	private String extractExtension(String originalFileName) {
 		if (originalFileName == null) {
 			return "";
