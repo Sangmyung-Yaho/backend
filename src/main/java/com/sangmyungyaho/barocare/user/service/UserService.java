@@ -207,8 +207,8 @@ public class UserService {
         // 하위 데이터 명시 삭제 (JPA 연관관계 없이 Long userId로 연결되어 있어 수동 처리 필수)
         reportRepository.deleteAllByCurrentSkinAnalysis_UserId(userId);
         skinComparisonRepository.deleteAllByCurrentSkinAnalysis_UserId(userId);
-        skinImageRepository.deleteAllByUserId(userId);
         skinAnalysisRepository.deleteAllByUserId(userId);
+        skinImageRepository.deleteAllByUserId(userId);
         routineRepository.deleteAllByUserId(userId);
         checkinRepository.deleteAllByUserId(userId);
 
