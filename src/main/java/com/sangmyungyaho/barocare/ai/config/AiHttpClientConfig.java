@@ -24,7 +24,7 @@ public class AiHttpClientConfig {
 	// (검색 성분이 늘거나 web_search 왕복이 더 걸리면 15초를 넘겨 정상 응답도 타임아웃으로 잘릴 위험이 있음).
 	// 정상 응답을 더 여유 있게 기다리도록 20초로 늘린다 - 그래도 무제한 대기보다는 훨씬 짧고, 뒤 단계
 	// (제품 웹검색은 체인의 마지막 단계)가 없어 이 20초는 그대로 POST /skin-analyses 전체 지연에 더해진다.
-	private static final Duration PRODUCT_SEARCH_TIMEOUT = Duration.ofSeconds(20);
+	private static final Duration PRODUCT_SEARCH_TIMEOUT = Duration.ofSeconds(30);
 
 	// Vision/원인분석/성분추천 각각의 목표 상한. spring.ai.openai.timeout(application.yaml)과 같은 값을
 	// 쓰지만, 그 프로퍼티는 request(전체 호출) 타임아웃만 지정하고 connect는 SDK 기본값(1분)을 그대로 쓴다
