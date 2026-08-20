@@ -105,6 +105,8 @@ public class ProductSearchClient {
 			List<ProductSuggestion> parsed = objectMapper.readValue(cleanJson(outputText), new TypeReference<List<ProductSuggestion>>() {
 			});
 
+			parsed.forEach(p -> log.info("제품 검증 전: brand={}, name={}, matchedIngredient={}, reason={}, productUrl={}", p.brand(), p.name(), p.matchedIngredient(), p.reason(), p.productUrl()));
+
 			List<ProductSuggestion> valid = parsed.stream()
 					.filter(this::isValid)
 					.limit(MAX_PRODUCTS)
