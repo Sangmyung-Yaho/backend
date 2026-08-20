@@ -14,6 +14,7 @@ import org.springframework.http.HttpStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
@@ -102,6 +103,72 @@ class ProductSearchClientTest {
 		List<ProductSearchClient.ProductSuggestion> result = client.search(List.of("판테놀"));
 
 		assertThat(result).isEmpty();
+	}
+
+	// ---------- 사용자 노출 텍스트 언어 규칙(reason/matchedIngredient는 반드시 한국어) ----------
+
+	@Test
+	void reason이_영어_문장_그대로면_결과에서_제외한다() {
+		// 실제 프론트에서 발견된 문제: 웹 검색 원문이 영문이면 GPT가 reason을 영어로 그대로 베껴 반환했다.
+		// 한글이 한 글자도 없는 reason은 프롬프트의 [언어 규칙] 위반으로 보고 걸러야 한다.
+		String outputText = "[{\"brand\":\"ANUA\",\"name\":\"3 Ceramide Panthenol Moisture Barrier Cream\","
+				+ "\"matchedIngredient\":\"판테놀\","
+				+ "\"reason\":\"Contains Panthenol along with Centella Asiatica Extract and Allantoin.\","
+				+ "\"productUrl\":\"https://example.com/a\"}]";
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withSuccess(responsesApiEnvelope(outputText), MediaType.APPLICATION_JSON));
+
+		List<ProductSearchClient.ProductSuggestion> result = client.search(List.of("판테놀"));
+
+		assertThat(result).isEmpty();
+	}
+
+	@Test
+	void matchedIngredient가_영문_성분명_그대로면_결과에서_제외한다() {
+		String outputText = "[{\"brand\":\"ANUA\",\"name\":\"3 Ceramide Panthenol Moisture Barrier Cream\","
+				+ "\"matchedIngredient\":\"Panthenol\","
+				+ "\"reason\":\"판테놀 성분이 피부 진정에 도움을 줄 수 있습니다.\","
+				+ "\"productUrl\":\"https://example.com/a\"}]";
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withSuccess(responsesApiEnvelope(outputText), MediaType.APPLICATION_JSON));
+
+		List<ProductSearchClient.ProductSuggestion> result = client.search(List.of("판테놀"));
+
+		assertThat(result).isEmpty();
+	}
+
+	@Test
+	void brand와_name이_영문이어도_matchedIngredient와_reason이_한국어면_유효하게_통과한다() {
+		// 요구사항: 브랜드명/제품명은 공식 표기(영문 포함)를 그대로 유지해도 된다 - 한글 강제 대상이 아니다.
+		String outputText = "[{\"brand\":\"ANUA\",\"name\":\"3 Ceramide Panthenol Moisture Barrier Cream\","
+				+ "\"matchedIngredient\":\"판테놀\","
+				+ "\"reason\":\"판테놀, 병풀추출물, 알란토인을 함유해 피부 장벽을 보호하고 자극받은 피부를 진정시키는 데 도움을 줄 수 있습니다.\","
+				+ "\"productUrl\":\"https://example.com/a\"}]";
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withSuccess(responsesApiEnvelope(outputText), MediaType.APPLICATION_JSON));
+
+		List<ProductSearchClient.ProductSuggestion> result = client.search(List.of("판테놀"));
+
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).brand()).isEqualTo("ANUA");
+		assertThat(result.get(0).name()).isEqualTo("3 Ceramide Panthenol Moisture Barrier Cream");
+		assertThat(result.get(0).matchedIngredient()).isEqualTo("판테놀");
+	}
+
+	@Test
+	void 요청_프롬프트에_사용자_노출_텍스트_한국어_작성_규칙이_명시되어_있다() {
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andExpect(content().string(org.hamcrest.Matchers.allOf(
+						org.hamcrest.Matchers.containsString(
+								"임의로 번역해서 지어낸 제품명을 만들지 말고"),
+						org.hamcrest.Matchers.containsString(
+								"matchedIngredient(연결된 성분명)와 reason(추천 이유)은 반드시 자연스러운 한국어")
+				)))
+				.andRespond(withSuccess(responsesApiEnvelope("[" + productJson("A") + "]"), MediaType.APPLICATION_JSON));
+
+		client.search(List.of("판테놀"));
+
+		mockServer.verify();
 	}
 
 	@Test

@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 실시간 웹 검색 기반 "관련 제품" 조회(ISSUE-30).
@@ -73,6 +74,19 @@ public class ProductSearchClient {
 			  페이지를 우선하고, 확실한 URL을 찾지 못한 제품은 제외한다.
 			- 의학적 치료 효과를 단정하지 않고, 피부 관리 관점에서만 이유를 설명한다.
 			- 결과는 최대 3개까지만 추천한다. 추천할 만한 제품이 없으면 빈 배열을 반환해도 된다.
+
+			[언어 규칙] 이 결과는 한국 사용자에게 그대로 노출된다. 검색 결과가 영문 페이지여도 아래 규칙을
+			반드시 지켜서 필드별로 다르게 처리해라.
+			- brand(브랜드명)는 공식 브랜드 표기를 그대로 쓴다(예: "ANUA", "Cetaphil", "라로슈포제"). 억지로
+			  한글로 바꾸지 않는다.
+			- name(제품명)은 국내에 정식 출시된 공식 한글 제품명이 검색으로 확인되면 그 한글 제품명을 쓴다.
+			  공식 한글 제품명을 확실히 확인할 수 없으면 임의로 번역해서 지어낸 제품명을 만들지 말고, 검색으로
+			  확인된 원래 표기(영문 등)를 그대로 유지한다.
+			- matchedIngredient(연결된 성분명)와 reason(추천 이유)은 반드시 자연스러운 한국어 문장/단어로
+			  작성한다. 검색 결과 원문이 영어여도 그 문장을 그대로 옮기지 말고 한국어로 번역해서 쓴다.
+			  matchedIngredient는 국내 화장품 성분표에서 흔히 쓰이는 한글 성분명을 쓴다
+			  (예: Panthenol → 판테놀, Centella Asiatica Leaf Extract → 병풀잎추출물, Allantoin → 알란토인,
+			  Ceramide NP → 세라마이드 NP).
 			- 다른 설명 없이 아래 형식의 JSON 배열만 출력한다(마크다운 코드블록도 쓰지 않는다):
 			  [{"brand": "...", "name": "...", "matchedIngredient": "...", "reason": "...", "productUrl": "..."}]
 			""";
@@ -223,9 +237,19 @@ public class ProductSearchClient {
 		return trimmed.trim();
 	}
 
+	// 한글이 한 글자도 없으면(완성형 한글 유니코드 블록 기준) 프롬프트의 [언어 규칙]을 어기고 영어 문장/성분명을
+	// 그대로 반환한 것으로 본다. brand/name은 공식 표기가 원래 영문일 수 있어(요구사항 1/2) 이 검사 대상이
+	// 아니다 - matchedIngredient/reason만 "반드시 한국어"가 절대 규칙이라 여기서 최종 방어선으로 강제한다.
+	private static final Pattern HANGUL_PATTERN = Pattern.compile("[가-힣]");
+
+	private boolean containsHangul(String text) {
+		return text != null && HANGUL_PATTERN.matcher(text).find();
+	}
+
 	// 필수 필드가 비어 있거나 productUrl이 URL 형태가 아니면(검색으로 확인되지 않았을 가능성이 높음) 제외한다.
 	// brand/name/matchedIngredient/reason은 사용자에게 그대로 노출되는 자연어 필드이므로, LLM이 내부
 	// 상태값(IMPROVED/POOR 등)을 실수로 섞어 반환한 경우도 여기서 함께 걸러낸다(UserFacingTextGuard).
+	// matchedIngredient/reason은 추가로 한글 포함 여부까지 검사해 영어 그대로 노출되는 것을 막는다.
 	private boolean isValid(ProductSuggestion product) {
 		return StringUtils.hasText(product.brand())
 				&& StringUtils.hasText(product.name())
@@ -236,7 +260,9 @@ public class ProductSearchClient {
 				&& !UserFacingTextGuard.containsLeak(product.brand())
 				&& !UserFacingTextGuard.containsLeak(product.name())
 				&& !UserFacingTextGuard.containsLeak(product.matchedIngredient())
-				&& !UserFacingTextGuard.containsLeak(product.reason());
+				&& !UserFacingTextGuard.containsLeak(product.reason())
+				&& containsHangul(product.matchedIngredient())
+				&& containsHangul(product.reason());
 	}
 
 	public record ProductSuggestion(
