@@ -5,6 +5,7 @@ import com.sangmyungyaho.barocare.ai.client.ProductSearchClient;
 import com.sangmyungyaho.barocare.ai.dto.AiDto;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
+import com.sangmyungyaho.barocare.global.text.UserFacingTextGuard;
 import com.sangmyungyaho.barocare.routine.dto.IngredientRecommendationDto;
 import com.sangmyungyaho.barocare.routine.entity.IngredientRecommendation;
 import com.sangmyungyaho.barocare.routine.entity.RecommendationStatus;
@@ -25,7 +26,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Pattern;
 
 /**
  * 추천 성분 + 관련 제품(ISSUE-30).
@@ -55,15 +55,6 @@ public class IngredientRecommendationService {
 
 	private static final List<IngredientRecommendationDto.IngredientItem> EMPTY_INGREDIENTS = List.of();
 	private static final List<IngredientRecommendationDto.ProductItem> EMPTY_PRODUCTS = List.of();
-
-	// ReportService.INTERNAL_STATE_LEAK_PATTERN과 동일한 목적/패턴(REP-101 원인 분석 문구 수정과 같은
-	// 근본 원인). \b가 아니라 "앞뒤에 영문 알파벳이 없다"는 부정 전후방탐색을 쓰는 이유도 동일하다 - \b가
-	// 한글과의 경계를 인식하는 방식이 JDK 버전에 따라 달라(이 프로젝트가 쓰는 JDK 17에서는 한글이 바로
-	// 붙으면 매치되지 않음) 실측으로 확인됐다.
-	private static final Pattern INTERNAL_STATE_LEAK_PATTERN = Pattern.compile(
-			"(?<![A-Za-z])(IMPROVED|WORSENED|UNCHANGED|INCREASED|DECREASED|STABLE|GOOD|MODERATE|POOR|SAFE|CAUTION|DANGER)(?![A-Za-z])",
-			Pattern.CASE_INSENSITIVE
-	);
 
 	private final IngredientRecommendationRepository ingredientRecommendationRepository;
 	private final AiClient aiClient;
@@ -278,20 +269,17 @@ public class IngredientRecommendationService {
 	}
 
 	// AI가 프롬프트 지침을 어기고 IMPROVED/POOR 같은 내부 상태값을 reason/name에 그대로 섞어 반환했는지
-	// 검증하는 최종 방어선(ReportService.validateNoInternalStateLeak과 동일한 목적). 여기서 걸리면
-	// RuntimeException으로 던져 바깥 catch(RuntimeException)이 흡수하고 오늘 추천을 FAILED 처리한다 -
-	// 깨진/새어나간 문구를 그대로 저장/응답하는 것보다 이번엔 실패로 취급하는 편이 안전하다.
+	// 검증하는 최종 방어선(ReportService.validateNoInternalStateLeak과 동일한 목적, 실제 정규식/매핑은
+	// 공용 UserFacingTextGuard를 함께 쓴다). 여기서 걸리면 RuntimeException으로 던져 바깥
+	// catch(RuntimeException)이 흡수하고 오늘 추천을 FAILED 처리한다 - 깨진/새어나간 문구를 그대로
+	// 저장/응답하는 것보다 이번엔 실패로 취급하는 편이 안전하다.
 	private void validateNoInternalStateLeak(AiDto.IngredientRecommendationResult result) {
 		for (AiDto.IngredientSuggestion suggestion : result.ingredients()) {
-			if (isLeaking(suggestion.name()) || isLeaking(suggestion.reason())) {
+			if (UserFacingTextGuard.containsLeak(suggestion.name()) || UserFacingTextGuard.containsLeak(suggestion.reason())) {
 				log.warn("AI 성분 추천 응답에 내부 상태값이 그대로 노출되어 거부함: {}", suggestion);
 				throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
 			}
 		}
-	}
-
-	private boolean isLeaking(String text) {
-		return text != null && INTERNAL_STATE_LEAK_PATTERN.matcher(text).find();
 	}
 
 	private String toJson(Object value) {
@@ -304,25 +292,46 @@ public class IngredientRecommendationService {
 
 	// json이 null이면(아직 COMPLETED 전) 빈 목록을 반환한다 - PENDING/PROCESSING/FAILED 상태에서도
 	// 안전하게 호출할 수 있어야 한다(예: getTodayRecommendation은 상태를 가리지 않고 항상 부른다).
+	//
+	// 조회 응답 직전 최종 방어선(2차): 저장 시점에 이미 validateNoInternalStateLeak으로 거른 데이터라도,
+	// 그 검증이 도입되기 전에 저장된 레거시 행이 있을 수 있다(DB 마이그레이션 없이 처리) - 여기서 한 번 더
+	// 훑어 내부 상태값이 남아 있으면 자연어 한국어로 치환한다.
 	private List<IngredientRecommendationDto.IngredientItem> parseIngredients(String json) {
 		if (json == null) {
 			return EMPTY_INGREDIENTS;
 		}
 		try {
-			return objectMapper.readValue(json, new TypeReference<List<IngredientRecommendationDto.IngredientItem>>() {
-			});
+			List<IngredientRecommendationDto.IngredientItem> ingredients =
+					objectMapper.readValue(json, new TypeReference<List<IngredientRecommendationDto.IngredientItem>>() {
+					});
+			return ingredients.stream()
+					.map(item -> new IngredientRecommendationDto.IngredientItem(
+							UserFacingTextGuard.sanitize(item.name()), UserFacingTextGuard.sanitize(item.reason())))
+					.toList();
 		} catch (JacksonException e) {
 			throw new IllegalStateException("추천 성분 역직렬화에 실패했습니다.", e);
 		}
 	}
 
+	// 성분과 동일한 이유로 2차 방어선을 둔다. brand/name은 실제 제품명이라 leak 가능성이 낮지만, 이
+	// 레코드의 모든 자연어 필드를 일관되게 다루기 위해 함께 sanitize한다(비어있지 않은 문자열이면 비용도
+	// 무시할 만큼 작다). productUrl은 URL이라 대상이 아니다.
 	private List<IngredientRecommendationDto.ProductItem> parseProducts(String json) {
 		if (json == null) {
 			return EMPTY_PRODUCTS;
 		}
 		try {
-			return objectMapper.readValue(json, new TypeReference<List<IngredientRecommendationDto.ProductItem>>() {
-			});
+			List<IngredientRecommendationDto.ProductItem> products =
+					objectMapper.readValue(json, new TypeReference<List<IngredientRecommendationDto.ProductItem>>() {
+					});
+			return products.stream()
+					.map(item -> new IngredientRecommendationDto.ProductItem(
+							UserFacingTextGuard.sanitize(item.brand()),
+							UserFacingTextGuard.sanitize(item.name()),
+							UserFacingTextGuard.sanitize(item.matchedIngredient()),
+							UserFacingTextGuard.sanitize(item.reason()),
+							item.productUrl()))
+					.toList();
 		} catch (JacksonException e) {
 			throw new IllegalStateException("추천 제품 역직렬화에 실패했습니다.", e);
 		}

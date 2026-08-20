@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
+import com.sangmyungyaho.barocare.global.text.UserFacingTextGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -223,13 +224,19 @@ public class ProductSearchClient {
 	}
 
 	// 필수 필드가 비어 있거나 productUrl이 URL 형태가 아니면(검색으로 확인되지 않았을 가능성이 높음) 제외한다.
+	// brand/name/matchedIngredient/reason은 사용자에게 그대로 노출되는 자연어 필드이므로, LLM이 내부
+	// 상태값(IMPROVED/POOR 등)을 실수로 섞어 반환한 경우도 여기서 함께 걸러낸다(UserFacingTextGuard).
 	private boolean isValid(ProductSuggestion product) {
 		return StringUtils.hasText(product.brand())
 				&& StringUtils.hasText(product.name())
 				&& StringUtils.hasText(product.matchedIngredient())
 				&& StringUtils.hasText(product.reason())
 				&& StringUtils.hasText(product.productUrl())
-				&& product.productUrl().startsWith("http");
+				&& product.productUrl().startsWith("http")
+				&& !UserFacingTextGuard.containsLeak(product.brand())
+				&& !UserFacingTextGuard.containsLeak(product.name())
+				&& !UserFacingTextGuard.containsLeak(product.matchedIngredient())
+				&& !UserFacingTextGuard.containsLeak(product.reason());
 	}
 
 	public record ProductSuggestion(

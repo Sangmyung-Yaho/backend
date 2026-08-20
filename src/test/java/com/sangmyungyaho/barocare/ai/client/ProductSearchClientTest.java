@@ -79,6 +79,32 @@ class ProductSearchClientTest {
 	}
 
 	@Test
+	void reason에_내부_상태값이_섞인_항목은_결과에서_제외한다() {
+		// UserFacingTextGuard 도입 전에는 이 필드에 대한 leak 검증이 아예 없었다(사용자 노출 텍스트
+		// 전수 점검에서 발견된 갭) - LLM이 reason에 내부 enum을 실수로 반환해도 걸러지는지 확인한다.
+		String outputText = "[{\"brand\":\"A\",\"name\":\"B\",\"matchedIngredient\":\"판테놀\","
+				+ "\"reason\":\"POOR 판정을 받은 성분입니다\",\"productUrl\":\"https://example.com/a\"}]";
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withSuccess(responsesApiEnvelope(outputText), MediaType.APPLICATION_JSON));
+
+		List<ProductSearchClient.ProductSuggestion> result = client.search(List.of("판테놀"));
+
+		assertThat(result).isEmpty();
+	}
+
+	@Test
+	void matchedIngredient에_내부_상태값이_섞인_항목은_결과에서_제외한다() {
+		String outputText = "[{\"brand\":\"A\",\"name\":\"B\",\"matchedIngredient\":\"IMPROVED 성분\","
+				+ "\"reason\":\"이유\",\"productUrl\":\"https://example.com/a\"}]";
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withSuccess(responsesApiEnvelope(outputText), MediaType.APPLICATION_JSON));
+
+		List<ProductSearchClient.ProductSuggestion> result = client.search(List.of("판테놀"));
+
+		assertThat(result).isEmpty();
+	}
+
+	@Test
 	void 검색결과가_4개를_넘으면_3개까지만_반환한다() {
 		String outputText = "[" + String.join(",", List.of(
 				productJson("A"), productJson("B"), productJson("C"), productJson("D")
