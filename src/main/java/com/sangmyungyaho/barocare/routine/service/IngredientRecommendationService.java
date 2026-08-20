@@ -111,36 +111,65 @@ public class IngredientRecommendationService {
 	@Async("recommendationExecutor")
 	public void generateTodayRecommendation(Long userId, SkinAnalysis todaySkinAnalysis) {
 		Long skinAnalysisId = todaySkinAnalysis.getId();
-		Object lock = recommendationGenerationLocks.computeIfAbsent(skinAnalysisId, id -> new Object());
-		synchronized (lock) {
-			IngredientRecommendation recommendation = ingredientRecommendationRepository.findBySkinAnalysisId(skinAnalysisId)
-					.orElseGet(() -> ingredientRecommendationRepository.save(
-							new IngredientRecommendation(userId, skinAnalysisId, todaySkinAnalysis.getAnalyzedAt().toLocalDate())));
+		log.info("[SkinAnalysis] recommendation background task started (skinAnalysisId={}, thread={})",
+				skinAnalysisId, Thread.currentThread().getName());
+		// 이 메서드 전체를 catch(RuntimeException)으로 한 번 더 감싼다 - find-or-create 조회/저장이나
+		// 락 획득 단계처럼 generateIngredients/generateProducts 바깥에서 나는 예외까지 전부
+		// [SkinAnalysis] 태그로 로그를 남기기 위함이다. 이게 없으면 그런 예외는 Spring의 기본
+		// @Async 예외 핸들러로만 넘어가 [SkinAnalysis] 로그 없이 조용히 사라지고, 이 skinAnalysisId의
+		// 추천은 어느 단계에서 멈췄는지 알 방법 없이 영구히 PENDING/PROCESSING에 남는다.
+		try {
+			Object lock = recommendationGenerationLocks.computeIfAbsent(skinAnalysisId, id -> new Object());
+			synchronized (lock) {
+				IngredientRecommendation recommendation = ingredientRecommendationRepository.findBySkinAnalysisId(skinAnalysisId)
+						.orElseGet(() -> ingredientRecommendationRepository.save(
+								new IngredientRecommendation(userId, skinAnalysisId, todaySkinAnalysis.getAnalyzedAt().toLocalDate())));
 
-			if (recommendation.getIngredientStatus() != RecommendationStatus.PENDING) {
-				log.info("이미 처리(중)이거나 끝난 추천이라 재실행을 건너뜀: skinAnalysisId={}, ingredientStatus={}",
-						skinAnalysisId, recommendation.getIngredientStatus());
-				return;
+				if (recommendation.getIngredientStatus() != RecommendationStatus.PENDING) {
+					log.info("이미 처리(중)이거나 끝난 추천이라 재실행을 건너뜀: skinAnalysisId={}, ingredientStatus={}",
+							skinAnalysisId, recommendation.getIngredientStatus());
+					return;
+				}
+
+				List<IngredientRecommendationDto.IngredientItem> ingredients = generateIngredients(recommendation, todaySkinAnalysis);
+				if (ingredients == null) {
+					return; // 성분 추천 실패 - failIngredients()에서 productStatus도 이미 FAILED로 확정됨.
+				}
+
+				generateProducts(recommendation, ingredients);
 			}
-
-			List<IngredientRecommendationDto.IngredientItem> ingredients = generateIngredients(recommendation, todaySkinAnalysis);
-			if (ingredients == null) {
-				return; // 성분 추천 실패 - failIngredients()에서 productStatus도 이미 FAILED로 확정됨.
-			}
-
-			generateProducts(recommendation, ingredients);
+		} catch (RuntimeException e) {
+			// generateIngredients/generateProducts 내부에서 이미 흡수되지 않은, 이 메서드 자체의 예외
+			// (find-or-create 조회/저장 실패 등). 이 경우 row 상태를 여기서 더 손댈 수 없을 수도 있지만
+			// (recommendation 참조 자체를 못 얻었을 수 있음), 최소한 원인을 크게 로그로 남긴다.
+			log.error("[SkinAnalysis] recommendation background task 처리 중 예상치 못한 오류 - skinAnalysisId={}", skinAnalysisId, e);
 		}
 	}
 
 	// 성분 추천 성공 시 결과 목록을, 실패 시 null을 반환한다(호출부가 이후 제품 검색 진행 여부를 판단).
+	//
+	// 버그 수정(PROCESSING에 영구적으로 멈추는 문제): 예전 구현은 "PROCESSING으로 표시하는 첫 save()"와
+	// "FAILED로 되돌리는 catch 블록의 save()"가 둘 다 아무 보호 없이 호출됐다. 이 두 save() 중 하나라도
+	// 예외를 던지면(DB 커넥션 풀 고갈, 일시적 접속 단절, 데드락 등 운영 환경에서 실제로 발생할 수 있는
+	// 일시적 오류) 그 예외는 어디서도 잡히지 않고 @Async 메서드 밖으로 그대로 새 나갔다. void @Async
+	// 메서드의 미처리 예외는 Spring이 기본 핸들러로 로그만 남기고 조용히 삼키므로, 그 시점까지 이미
+	// 커밋된 마지막 상태(대개 PROCESSING)에서 다시는 갱신되지 않았다 - AI 호출 자체가 성공/실패했는지와
+	// 무관하게, "그 결과를 반영하는 save()"가 실패하면 이 메서드가 뭘 하든 소용이 없었다는 뜻이다.
+	//
+	// 지금은 "PROCESSING 표시"와 "FAILED 표시" 두 save()만 {@link #saveRecommendationQuietly}로 감싸
+	// 이 경로에서 예외가 나도 [SkinAnalysis] 태그로 크게 로그를 남기고 계속 진행되게 한다(더 이상 던질
+	// 곳이 없는 마지막 보루이기 때문). 반면 "COMPLETED 표시" save()는 일부러 보호하지 않는다 - 여기서
+	// 예외가 나면 catch 블록으로 흘러가 FAILED로 되돌리는 기존 폴백이 그대로 작동해야 하기 때문이다
+	// (완료 저장을 조용히 삼키면 실제로는 저장 안 됐는데 호출부는 성공한 걸로 착각하게 된다).
 	private List<IngredientRecommendationDto.IngredientItem> generateIngredients(
 			IngredientRecommendation recommendation, SkinAnalysis todaySkinAnalysis
 	) {
 		Long skinAnalysisId = recommendation.getSkinAnalysisId();
 		recommendation.markIngredientProcessing();
-		ingredientRecommendationRepository.save(recommendation);
+		saveRecommendationQuietly(recommendation, "ingredient processing 시작", skinAnalysisId);
 
 		long startMs = System.currentTimeMillis();
+		log.info("[SkinAnalysis] ingredient recommendation started (skinAnalysisId={})", skinAnalysisId);
 		try {
 			AiDto.IngredientRecommendationResult result = aiClient.recommendIngredients(
 					todaySkinAnalysis.getRednessLevel(), todaySkinAnalysis.getTroubleLevel(), todaySkinAnalysis.getSkinLevel());
@@ -149,7 +178,7 @@ public class IngredientRecommendationService {
 					result.ingredients().stream().map(IngredientRecommendationDto.IngredientItem::from).toList();
 
 			recommendation.completeIngredients(toJson(ingredients));
-			ingredientRecommendationRepository.save(recommendation);
+			ingredientRecommendationRepository.save(recommendation); // 실패하면 catch로 흘러가 FAILED 폴백
 			log.info("[SkinAnalysis] ingredient recommendation completed: {}ms (skinAnalysisId={})",
 					System.currentTimeMillis() - startMs, skinAnalysisId);
 			return ingredients;
@@ -157,7 +186,7 @@ public class IngredientRecommendationService {
 			log.warn("[SkinAnalysis] ingredient recommendation failed after {}ms - FAILED 처리(루틴/피부 분석에는 영향 없음): skinAnalysisId={}",
 					System.currentTimeMillis() - startMs, skinAnalysisId, e);
 			recommendation.failIngredients();
-			ingredientRecommendationRepository.save(recommendation);
+			saveRecommendationQuietly(recommendation, "ingredient failed 저장", skinAnalysisId);
 			return null;
 		}
 	}
@@ -165,9 +194,10 @@ public class IngredientRecommendationService {
 	private void generateProducts(IngredientRecommendation recommendation, List<IngredientRecommendationDto.IngredientItem> ingredients) {
 		Long skinAnalysisId = recommendation.getSkinAnalysisId();
 		recommendation.markProductProcessing();
-		ingredientRecommendationRepository.save(recommendation);
+		saveRecommendationQuietly(recommendation, "product processing 시작", skinAnalysisId);
 
 		long startMs = System.currentTimeMillis();
+		log.info("[SkinAnalysis] product search started (skinAnalysisId={})", skinAnalysisId);
 		try {
 			List<String> ingredientNames = ingredients.stream().map(IngredientRecommendationDto.IngredientItem::name).toList();
 			List<IngredientRecommendationDto.ProductItem> products = productSearchClient.search(ingredientNames).stream()
@@ -175,7 +205,7 @@ public class IngredientRecommendationService {
 					.toList();
 
 			recommendation.completeProducts(toJson(products));
-			ingredientRecommendationRepository.save(recommendation);
+			ingredientRecommendationRepository.save(recommendation); // 실패하면 catch로 흘러가 FAILED 폴백
 			log.info("[SkinAnalysis] product search completed: {}ms (skinAnalysisId={})",
 					System.currentTimeMillis() - startMs, skinAnalysisId);
 		} catch (RuntimeException e) {
@@ -185,7 +215,23 @@ public class IngredientRecommendationService {
 			log.warn("[SkinAnalysis] product search failed after {}ms - FAILED 처리(성분 추천은 유지): skinAnalysisId={}",
 					System.currentTimeMillis() - startMs, skinAnalysisId, e);
 			recommendation.failProducts();
+			saveRecommendationQuietly(recommendation, "product failed 저장", skinAnalysisId);
+		}
+	}
+
+	// 상태 전이 저장 전용 헬퍼. "더 이상 던질 곳이 없는" save()에만 쓴다(PROCESSING 최초 표시, FAILED 최종
+	// 표시) - save() 자체가 던지는 예외(DB 커넥션 풀 고갈, 일시적 접속 단절, 데드락 등)를 여기서 마지막으로
+	// 흡수한다. 이게 없으면 그 예외가 @Async 메서드 밖으로 새 나가 Spring 기본 핸들러가 조용히 로그만
+	// 남기고 삼켜버리고, 이 row는 마지막으로 성공한 상태에 영구히 멈춘다. 흡수만 하고 재시도는 하지
+	// 않는다(재시도까지 필요하면 별도 설계가 필요한 더 큰 변경이라 이번 범위에서는 제외) - 대신
+	// [SkinAnalysis] 태그로 ERROR 로그를 남겨 운영에서 반드시 눈에 띄게 한다.
+	private void saveRecommendationQuietly(IngredientRecommendation recommendation, String stage, Long skinAnalysisId) {
+		try {
 			ingredientRecommendationRepository.save(recommendation);
+		} catch (RuntimeException e) {
+			log.error("[SkinAnalysis] 추천 상태 저장 실패({}) - 이 skinAnalysisId의 추천은 마지막으로 커밋된 상태에 멈출 수 있음: "
+							+ "skinAnalysisId={}, ingredientStatus={}, productStatus={}",
+					stage, skinAnalysisId, recommendation.getIngredientStatus(), recommendation.getProductStatus(), e);
 		}
 	}
 
