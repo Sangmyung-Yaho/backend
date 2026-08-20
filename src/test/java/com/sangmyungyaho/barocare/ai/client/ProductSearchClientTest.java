@@ -10,11 +10,14 @@ import org.springframework.web.client.RestClient;
 
 import java.util.List;
 
+import org.springframework.http.HttpStatus;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 /**
@@ -97,6 +100,62 @@ class ProductSearchClientTest {
 				.isInstanceOf(GlobalException.class)
 				.extracting("errorCode")
 				.isEqualTo(ErrorCode.AI_ANALYSIS_FAILED);
+	}
+
+	// ---------- 429 Too Many Requests 재시도(운영 로그에서 실측된 실패 원인 - OpenAI TPM 한도 일시 초과) ----------
+
+	@Test
+	void 첫_시도가_429면_짧은_대기_후_재시도해서_성공한다() {
+		String outputText = "[{\"brand\":\"라로슈포제\",\"name\":\"시카플라스트 밤 B5+\",\"matchedIngredient\":\"판테놀\","
+				+ "\"reason\":\"진정 관리에 도움을 줄 수 있습니다.\",\"productUrl\":\"https://www.laroche-posay.co.kr/product/a\"}]";
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
+						.body(rateLimitErrorBody())
+						.contentType(MediaType.APPLICATION_JSON));
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withSuccess(responsesApiEnvelope(outputText), MediaType.APPLICATION_JSON));
+
+		List<ProductSearchClient.ProductSuggestion> result = client.search(List.of("판테놀"));
+
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).brand()).isEqualTo("라로슈포제");
+		mockServer.verify(); // 정확히 2번(429 + 성공) 호출됐는지까지 확인.
+	}
+
+	@Test
+	void 재시도_한도까지_계속_429면_AI_ANALYSIS_FAILED를_던진다() {
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS).body(rateLimitErrorBody()).contentType(MediaType.APPLICATION_JSON));
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS).body(rateLimitErrorBody()).contentType(MediaType.APPLICATION_JSON));
+
+		assertThatThrownBy(() -> client.search(List.of("판테놀")))
+				.isInstanceOf(GlobalException.class)
+				.extracting("errorCode")
+				.isEqualTo(ErrorCode.AI_ANALYSIS_FAILED);
+		mockServer.verify(); // 재시도 한도(2회)만큼만 호출되고 무한 재시도하지 않는지 확인.
+	}
+
+	@Test
+	void HTTP_상태코드가_429가_아니면_재시도하지_않고_즉시_실패한다() {
+		// withServerError()(500)는 딱 1번만 stub돼 있다 - 코드가 실수로 재시도를 시도하면
+		// MockRestServiceServer가 "더 이상 예상된 요청이 없다"며 즉시 실패하므로, 이 테스트가 예외 없이
+		// GlobalException만 받고 끝난다는 것 자체가 "재시도하지 않았다"는 증거다.
+		mockServer.expect(requestTo("https://api.openai.com/v1/responses"))
+				.andRespond(withServerError());
+
+		assertThatThrownBy(() -> client.search(List.of("판테놀")))
+				.isInstanceOf(GlobalException.class)
+				.extracting("errorCode")
+				.isEqualTo(ErrorCode.AI_ANALYSIS_FAILED);
+		mockServer.verify();
+	}
+
+	private String rateLimitErrorBody() {
+		return """
+				{"error": {"message": "Rate limit reached for gpt-5-nano on tokens per min (TPM). Please try again in 441ms.",
+				"type": "tokens", "param": null, "code": "rate_limit_exceeded"}}
+				""";
 	}
 
 	@Test
