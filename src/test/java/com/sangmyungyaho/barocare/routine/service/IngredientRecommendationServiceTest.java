@@ -228,6 +228,40 @@ class IngredientRecommendationServiceTest {
 	}
 
 	@Test
+	void getIngredientStatus는_레거시_저장데이터에_내부_상태값이_남아있어도_자연어로_치환해_반환한다() {
+		// 1차 방어선 도입 이전에 저장된 레거시 ingredients-json을 흉내낸다 - 조회 시점
+		// (UserFacingTextGuard.sanitize)에서 걸러져야 한다.
+		IngredientRecommendation saved = new IngredientRecommendation(USER_ID, SKIN_ANALYSIS_ID, LocalDate.now());
+		saved.completeIngredients("ingredients-json");
+		when(ingredientRecommendationRepository.findBySkinAnalysisId(SKIN_ANALYSIS_ID)).thenReturn(Optional.of(saved));
+		var legacyIngredient = new IngredientRecommendationDto.IngredientItem("판테놀", "피부 상태가 POOR로 판정되어 CAUTION이 필요합니다.");
+		when(objectMapper.readValue(eq("ingredients-json"), org.mockito.ArgumentMatchers.<tools.jackson.core.type.TypeReference<List<IngredientRecommendationDto.IngredientItem>>>any()))
+				.thenReturn(List.of(legacyIngredient));
+
+		var result = service.getIngredientStatus(SKIN_ANALYSIS_ID);
+
+		assertThat(result.ingredients()).hasSize(1);
+		assertThat(result.ingredients().get(0).reason()).isEqualTo("피부 상태가 부족로 판정되어 주의이 필요합니다.");
+	}
+
+	@Test
+	void getProductStatus는_레거시_저장데이터에_내부_상태값이_남아있어도_자연어로_치환해_반환한다() {
+		IngredientRecommendation saved = new IngredientRecommendation(USER_ID, SKIN_ANALYSIS_ID, LocalDate.now());
+		saved.completeProducts("products-json");
+		when(ingredientRecommendationRepository.findBySkinAnalysisId(SKIN_ANALYSIS_ID)).thenReturn(Optional.of(saved));
+		var legacyProduct = new IngredientRecommendationDto.ProductItem(
+				"라로슈포제", "시카플라스트 밤 B5+", "판테놀", "DANGER 수준의 피부에도 SAFE합니다.", "https://example.com/a");
+		when(objectMapper.readValue(eq("products-json"), org.mockito.ArgumentMatchers.<tools.jackson.core.type.TypeReference<List<IngredientRecommendationDto.ProductItem>>>any()))
+				.thenReturn(List.of(legacyProduct));
+
+		var result = service.getProductStatus(SKIN_ANALYSIS_ID);
+
+		assertThat(result.products()).hasSize(1);
+		assertThat(result.products().get(0).reason()).isEqualTo("위험 수준의 피부에도 안전합니다.");
+		assertThat(result.products().get(0).productUrl()).isEqualTo("https://example.com/a"); // URL은 치환 대상이 아니다
+	}
+
+	@Test
 	void getIngredientStatus는_PROCESSING이면_빈_배열과_함께_상태만_반환한다() {
 		IngredientRecommendation saved = new IngredientRecommendation(USER_ID, SKIN_ANALYSIS_ID, LocalDate.now());
 		saved.markIngredientProcessing();

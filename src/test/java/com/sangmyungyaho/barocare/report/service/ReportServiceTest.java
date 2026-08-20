@@ -736,6 +736,47 @@ class ReportServiceTest {
 	}
 
 	@Test
+	void getLatestSavedReport은_레거시_저장데이터에_내부_상태값이_남아있어도_자연어로_치환해_반환한다() {
+		// 1차 방어선(validateNoInternalStateLeak) 도입 이전에 저장된 레거시 summary/primary_causes를
+		// 흉내낸다 - 조회 시점(UserFacingTextGuard.sanitize)에서 걸러져야 한다.
+		Report report = mock(Report.class);
+		when(report.getId()).thenReturn(56L);
+		when(report.getReportDate()).thenReturn(LocalDate.of(2026, 8, 12));
+		when(report.getRednessPreviousScore()).thenReturn(1);
+		when(report.getRednessCurrentScore()).thenReturn(0);
+		when(report.getRednessStatus()).thenReturn(ReportChangeStatus.IMPROVED);
+		when(report.getTroublePreviousScore()).thenReturn(0);
+		when(report.getTroubleCurrentScore()).thenReturn(0);
+		when(report.getTroubleStatus()).thenReturn(ReportChangeStatus.UNCHANGED);
+		when(report.getPreviousSkinAnalysis()).thenReturn(mock(SkinAnalysis.class));
+		when(report.getPrimaryCausesJson()).thenReturn("legacy-json");
+		when(report.getSummary()).thenReturn(
+				"붉은기와 트러블은 모두 1 감소해 IMPROVED 및 DECREASED 상태이며, 주요 위험 요인 후보로 POOR 판정을 받은 스트레스와 수분 섭취가 확인됩니다.");
+		when(reportRepository.findTopByCurrentSkinAnalysis_UserIdOrderByReportDateDescIdDesc(USER_ID))
+				.thenReturn(Optional.of(report));
+		ReportDto.PrimaryCause legacyCause = new ReportDto.PrimaryCause(
+				ReportCauseFactor.STRESS, "STRESS 요인", 5.0, "점",
+				"POOR 판정을 받아 DANGER 수준입니다.", 3.0, 2.0,
+				com.sangmyungyaho.barocare.report.entity.BaselineType.PERSONAL_AVERAGE
+		);
+		when(objectMapper.readValue(eq("legacy-json"),
+				org.mockito.ArgumentMatchers.<tools.jackson.core.type.TypeReference<List<ReportDto.PrimaryCause>>>any()))
+				.thenReturn(List.of(legacyCause));
+
+		Optional<ReportDto.Response> result = reportService.getLatestSavedReport(USER_ID);
+
+		assertThat(result).isPresent();
+		ReportDto.Response response = result.get();
+		assertThat(response.summary())
+				.isEqualTo("붉은기와 트러블은 모두 1 감소해 개선됨 및 감소함 상태이며, 주요 위험 요인 후보로 부족 판정을 받은 스트레스와 수분 섭취가 확인됩니다.");
+		assertThat(response.primaryCauses()).hasSize(1);
+		assertThat(response.primaryCauses().get(0).name()).isEqualTo("스트레스 요인");
+		assertThat(response.primaryCauses().get(0).description()).isEqualTo("부족 판정을 받아 위험 수준입니다.");
+		assertThat(com.sangmyungyaho.barocare.global.text.UserFacingTextGuard.containsLeak(response.summary())).isFalse();
+		assertThat(com.sangmyungyaho.barocare.global.text.UserFacingTextGuard.containsLeak(response.primaryCauses().get(0).description())).isFalse();
+	}
+
+	@Test
 	void getLatestSavedReport은_저장된_리포트가_없으면_빈_Optional을_반환하고_새로_생성하지_않는다() {
 		when(reportRepository.findTopByCurrentSkinAnalysis_UserIdOrderByReportDateDescIdDesc(USER_ID))
 				.thenReturn(Optional.empty());
