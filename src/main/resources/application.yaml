@@ -9,7 +9,13 @@ spring:
     name: barocare
 
   datasource:
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/barocare
+    # connectionTimeZone=Asia/Seoul: JDBC 드라이버(mysql-connector-j)가 LocalDateTime 값을 JVM
+    # 기본존과 MySQL 세션존 사이에서 임의로 재해석/변환하지 않고 항상 Asia/Seoul 기준으로 다루게 고정한다.
+    # 이 값이 없으면 드라이버가 JVM 기본존(=현재 프로세스의 TimeZone.getDefault())을 기준으로 자체
+    # 변환을 시도하는데, 그 시점의 JVM 기본존이 무엇이었는지에 따라 결과가 달라지는 게 이번 버그의
+    # 원인 중 하나였다(Hibernate가 UTC로 생성한 값에 드라이버가 -9시간을 한 번 더 적용해 총 18시간이
+    # 밀리는 이중 보정 문제).
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/barocare?connectionTimeZone=Asia/Seoul
     username: root
     password: ${DB_PASSWORD}
 
@@ -22,6 +28,11 @@ spring:
     properties:
       hibernate:
         format_sql: true
+        # @CreationTimestamp(analyzed_at, report.created_at 등)가 LocalDateTime 값을 생성/바인딩할 때
+        # 쓰는 기준 타임존을 명시적으로 고정한다. JVM 기본존(TimeZone.setDefault() 결과)이나 빈 초기화
+        # 순서에 기대지 않고 Hibernate 스스로 Asia/Seoul을 쓰게 만드는 게 이번 수정의 핵심이다.
+        jdbc:
+          time_zone: Asia/Seoul
 
   sql:
     init:
@@ -54,12 +65,18 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+  # HTTP 응답 직렬화(Instant/OffsetDateTime 등 존 정보를 다루는 타입)도 Asia/Seoul 기준으로 통일한다.
+  # LocalDate/LocalDateTime 필드는 존 정보가 없어 이 설정의 영향을 받지 않지만, 서비스 전체의 시간
+  # 기준을 한 곳에서 명시적으로 선언해두는 목적으로 함께 설정한다.
+  jackson:
+    time-zone: Asia/Seoul
+
   servlet:
     multipart:
       # TODO: 파일 크기 제한 기획이 확정되면 실제 정책에 맞게 조정한다. 현재는 Spring 기본값(1MB)이
       # 너무 작아 정상적인 이미지 업로드도 막을 수 있어 넉넉한 값으로만 완화해둔다.
-      max-file-size: 10MB
-      max-request-size: 10MB
+      max-file-size: 20MB
+      max-request-size: 20MB
 
 oauth2:
   kakao:

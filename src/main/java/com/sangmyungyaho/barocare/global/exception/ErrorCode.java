@@ -8,6 +8,7 @@ public enum ErrorCode {
 	USER_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 사용자입니다."),
 	CHECKIN_ALREADY_EXISTS(HttpStatus.CONFLICT, "해당 날짜의 체크인이 이미 존재합니다."),
 	INVALID_IMAGE(HttpStatus.BAD_REQUEST, "유효한 이미지 파일을 업로드해주세요."),
+	FILE_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "파일 용량이 너무 큽니다. 20MB 이하 이미지를 업로드해주세요."),
 	SKIN_IMAGE_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 피부 이미지입니다."),
 	SKIN_IMAGE_FILE_NOT_FOUND(HttpStatus.INTERNAL_SERVER_ERROR, "이미지 파일을 찾을 수 없습니다."),
 	SKIN_ANALYSIS_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 피부 분석입니다."),

@@ -172,7 +172,12 @@ public class ReportService {
 						userId, todaySkinAnalysis.getId());
 			}
 
-			LocalDate referenceDate = todaySkinAnalysis.getAnalyzedAt().toLocalDate();
+			// 리포트 기준일은 SkinAnalysis.analyzedAt(자동 생성 타임스탬프)이 아니라 오늘 체크인의
+			// checkedDate를 그대로 쓴다. 이 리포트는 "오늘 체크인에 대한 원인 분석"이므로 날짜 판정
+			// 기준은 체크인이 맞고, analyzedAt은 애초에 그 목적의 값이 아니다(피부 분석이 실제로 저장된
+			// 시각일 뿐, 자정 근처처럼 analyzedAt과 checkedDate의 달력 날짜가 달라질 수 있는 값에 기대면
+			// 리포트가 엉뚱한 날짜로 저장된다 - 실제로 analyzedAt 생성 타임존 이슈로 이 문제가 있었다).
+			LocalDate referenceDate = todayCheckin.getCheckedDate();
 			List<Checkin> previousCheckins = checkinRepository
 					.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(userId, referenceDate);
 
