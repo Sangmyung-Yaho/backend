@@ -524,7 +524,7 @@ public class ReportService {
 	// 둘 다 non-null로만 계산되므로(직전 분석 유무에 따라 함께 결정됨) 한쪽만 null인 경우는 없다.
 	private String buildChangeSentence(ReportChangeStatus rednessStatus, ReportChangeStatus troubleStatus) {
 		if (rednessStatus == null || troubleStatus == null) {
-			return "이번이 첫 피부 분석이라 아직 이전 기록과 비교할 변화는 없어요.";
+			return "";
 		}
 		if (rednessStatus == troubleStatus) {
 			return switch (rednessStatus) {
