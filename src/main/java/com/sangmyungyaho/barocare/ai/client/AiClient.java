@@ -112,8 +112,12 @@ public class AiClient {
 
 	/**
 	 * 피부 변화 원인 분석(REP-101) 프롬프트 버전. 이 프롬프트를 수정하면 함께 올린다.
+	 * v4: summary의 역할을 "리포트 전체 요약"에서 "원인 요인 설명 한 문장"으로 좁혔다. 붉은기/트러블의
+	 * 변화 문구·전체 평가 문구는 이제 ReportService가 rednessStatus/troubleStatus로 결정적으로 조립한다
+	 * (AI 프롬프트가 IMPROVED/WORSENED/POOR 같은 내부 enum 토큰을 그대로 노출하던 문제의 근본 수정 - 자세한
+	 * 내용은 ReportService#buildSummary 참고).
 	 */
-	public static final String CAUSE_ANALYSIS_SCHEMA_VERSION = "v3-cause-analysis";
+	public static final String CAUSE_ANALYSIS_SCHEMA_VERSION = "v4-cause-analysis";
 
 	/**
 	 * 피부 변화 원인 후보 "설명 생성" 프롬프트.
@@ -121,36 +125,53 @@ public class AiClient {
 	 * 확정해서 넘긴다. GPT는 그 후보를 뒤집거나 새 후보를 추가하는 판정자가 아니라, 이미 확정된 후보에 대해
 	 * 사용자에게 보여줄 자연어 설명을 쓰는 역할만 한다. redness/trouble의 점수·변화량·상태·변화방향도
 	 * 전부 Java가 계산해 전달하며, GPT는 이 값을 다시 계산하지 않는다.
+	 *
+	 * summary는 더 이상 리포트 전체를 요약하지 않는다 - "원인 요인" 설명 한 문장만 작성하며, 붉은기/트러블
+	 * 변화 문구는 ReportService가 별도로 붙인다(중복 노출 방지). ReportService가 최종 방어선으로
+	 * IMPROVED/POOR 같은 영어 상태값 리터럴이 응답에 섞여 있으면 AI_ANALYSIS_FAILED로 거부하므로, 이 프롬프트를
+	 * 수정할 때도 "출력에 영어 상태값을 쓰지 않는다" 원칙은 유지해야 한다.
 	 */
 	private static final String CAUSE_ANALYSIS_SYSTEM_PROMPT = """
-			너는 사용자의 피부 변화 분석 결과와 생활습관 체크인 데이터를 보고, 이미 확정된 원인 후보에 대해
-			자연어 설명을 작성하는 도구다. 어떤 요인이 원인인지 "판정"하는 것은 네 역할이 아니다 - 그 판정은
-			이미 백엔드가 끝냈고, 너는 그 결과를 설명하고 요약하는 역할만 한다.
+			너는 사용자의 피부 변화 분석 결과와 생활습관 체크인 데이터를 보고, 이미 확정된 원인 후보를
+			자연스러운 한국어 문장으로 설명하는 도구다. 어떤 요인이 원인인지 "판정"하는 것은 네 역할이 아니다 -
+			그 판정은 이미 백엔드가 끝냈고, 너는 그 결과를 문장으로 풀어 설명하는 역할만 한다.
+
+			[절대 규칙] 다음은 백엔드 내부에서만 쓰는 영어 상태값이다. 이 단어들을 대소문자 어떤 형태로도
+			문장에 그대로 쓰지 마라:
+			IMPROVED, WORSENED, UNCHANGED, INCREASED, DECREASED, STABLE, GOOD, MODERATE, POOR, SAFE, CAUTION, DANGER
+			이 값이 뜻하는 내용(예: 수면 판정이 POOR)은 raw 수치나 자연스러운 한국어로 풀어써라
+			(예: "최근 평균보다 수면 시간이 짧았어요"). "낮음", "보통", "높음" 같은 등급 라벨도 화면에 이미
+			별도로 표시되는 정보이니 반복하지 마라.
 
 			다음 원칙을 반드시 지켜라.
-			- redness/trouble의 점수, 변화량, 상태(IMPROVED/WORSENED/UNCHANGED), 변화 방향
-			  (rednessDirection/troubleDirection: INCREASED/STABLE/DECREASED), baseline(최초 분석) 대비 정보는
-			  전부 이미 계산되어 주어진 값이다. 너는 이 값을 새로 계산하거나 추정하지 않는다. 그대로 인용해서
-			  해석에만 사용하라.
-			- 수면/스트레스/수분 섭취의 GOOD/MODERATE/POOR 판정(sleepLevel/stressLevel/waterLevel)도 이미 계산되어
-			  주어진 값이다. 이 판정은 개인 기준선(최근 7일 평균) 또는 고정 기준표로 백엔드가 계산한 결과이므로,
-			  너는 raw 수치(시간/지수/ml)만 보고 이 등급을 다시 매기거나 뒤집지 않는다.
+			- redness/trouble의 점수, 변화량, 상태, baseline 대비 정보는 참고용 컨텍스트일 뿐이다. 붉은기/트러블이
+			  어떻게 변했는지에 대한 문장은 백엔드가 별도로 작성하므로, 네 출력에는 다시 등장시키지 않는다
+			  (같은 정보를 두 번 말하지 않는다) - 너는 오직 "원인 요인 설명"만 작성한다.
+			- 수면/스트레스/수분 섭취의 판정(sleepLevel/stressLevel/waterLevel)도 이미 계산되어 주어진 값이다.
+			  너는 raw 수치(시간/지수/ml)만 보고 이 판정을 다시 매기거나 뒤집지 않는다.
 			- causes(원인 후보 목록)는 candidateFactors에 주어진 요인으로만 작성한다. candidateFactors는 백엔드가
-			  "POOR로 판정되어 원인일 가능성이 높다"고 이미 확정한 목록이다. 이 목록에 없는 요인(GOOD/MODERATE로
-			  판정된, 즉 정상 범위인 요인 포함)은 causes에 절대 추가하지 마라 - 네가 추가해도 백엔드가 다시 걸러내
-			  최종 응답에는 반영되지 않는다. candidateFactors가 비어 있으면 causes도 반드시 빈 목록으로 반환하라.
+			  "원인일 가능성이 높다"고 이미 확정한 목록이다. 이 목록에 없는 요인은 causes에 절대 추가하지 마라 -
+			  네가 추가해도 백엔드가 다시 걸러내 최종 응답에는 반영되지 않는다. candidateFactors가 비어 있으면
+			  causes도 반드시 빈 목록으로 반환하라.
 			- 피부 점수(숫자)를 새로 만들어내지 않는다. 네 응답에는 점수 필드 자체가 없다.
-			- 각 원인 후보의 name은 "수면 부족"처럼 짧은 한국어 라벨, description은 해당 체크인 값(최근값/평균)과
-			  판정 등급, 피부 변화(상태/변화방향)를 근거로 1~2문장으로 설명한다.
-			- summary는 candidateFactors와 피부 변화를 종합해 한 문장으로 요약한다. candidateFactors가 비어 있으면
-			  뚜렷한 위험 요인이 없다는 취지로 요약하라(원인을 억지로 만들어내지 않는다).
+			- 각 원인 후보의 name은 "수면 부족"처럼 짧은 한국어 라벨, description은 해당 체크인 값(최근값/평균)을
+			  근거로 1문장으로 자연스럽게 설명한다. "~영향을 준 것으로 보여요"처럼 완곡하게 표현하고
+			  "때문에"처럼 단정적인 인과관계 표현은 쓰지 않는다.
+			- summary는 candidateFactors를 근거로 "원인 요인" 설명만 담은 한 문장으로 작성한다.
+			  예: "최근 기록에서는 스트레스와 수분 섭취가 피부 변화에 영향을 준 주요 요인으로 보여요."
+			  candidateFactors가 비어 있으면 "최근 기록에서는 특별히 두드러진 위험 요인은 보이지 않아요." 같은
+			  취지로 작성한다(원인을 억지로 만들어내지 않는다).
 			- 질환명 또는 의학적 진단을 생성하지 않는다.
 			""";
 
 	/**
 	 * 추천 성분(ISSUE-30) 프롬프트 버전. 이 프롬프트를 수정하면 함께 올린다.
+	 * v2: 프롬프트가 CAUTION/DANGER/SAFE 등급을 조건문처럼 그대로 보여주며 참고하라고 지시하던 부분이,
+	 * GPT가 reason에 그 영어 토큰을 그대로 베껴 쓰는 원인이었다(REP-101 원인 분석 프롬프트에서 있었던 것과
+	 * 동일한 문제). 등급을 조건으로 쓰는 지시는 유지하되 "이 단어를 출력에 쓰지 마라"를 명시했고,
+	 * IngredientRecommendationService에도 같은 방식의 후처리 검증을 추가했다.
 	 */
-	public static final String INGREDIENT_RECOMMENDATION_SCHEMA_VERSION = "v1-ingredient-recommendation";
+	public static final String INGREDIENT_RECOMMENDATION_SCHEMA_VERSION = "v2-ingredient-recommendation";
 
 	/**
 	 * 피부 상태 기반 "화장품 성분 추천" 프롬프트.
@@ -161,12 +182,18 @@ public class AiClient {
 			너는 사용자의 피부 분석 결과(붉은기/트러블/종합 등급)를 보고, 지금 피부 상태 관리에 도움이 될 수
 			있는 화장품 성분을 추천하는 도구다.
 
+			[절대 규칙] 등급을 나타내는 다음 영어 단어들은 백엔드 내부에서만 쓰는 상태값이다. 이 단어들을
+			대소문자 어떤 형태로도 reason 문장에 그대로 쓰지 마라: SAFE, CAUTION, DANGER, GOOD, MODERATE, POOR,
+			IMPROVED, WORSENED, UNCHANGED, INCREASED, DECREASED, STABLE. 등급 자체를 언급하고 싶으면
+			"자극에 예민한 상태", "붉은기가 있는 상태"처럼 자연스러운 한국어로 풀어써라.
+
 			다음 원칙을 반드시 지켜라.
 			- 질환명 또는 의학적 진단·치료 효과를 단정하지 않는다("치료한다", "낫는다", "완치" 같은 표현 금지).
 			- "관리에 도움을 줄 수 있다", "완화에 도움이 될 수 있다" 수준의 피부 관리(스킨케어) 관점으로만 서술한다.
 			- 실제로 화장품에 흔히 쓰이는 성분명만 추천한다(존재하지 않는 성분을 지어내지 않는다).
 			- 붉은기/트러블 등급이 CAUTION 또는 DANGER면 해당 부위 관리에 도움이 되는 성분을 우선하고,
-			  전반적으로 SAFE면 진정·보습 등 순한 성분 위주로 추천한다.
+			  전반적으로 SAFE면 진정·보습 등 순한 성분 위주로 추천한다(이건 너의 판단 기준일 뿐, 이 단어들을
+			  reason에 그대로 옮겨 쓰라는 뜻이 아니다).
 			- 성분은 2~4개만 추천한다.
 			- 각 성분의 reason은 1문장으로, 왜 지금 피부 상태에 이 성분이 맞는지 설명한다.
 			- name과 reason은 사용자에게 그대로 노출되는 값이므로 반드시 한국어로 작성한다. name은 영문

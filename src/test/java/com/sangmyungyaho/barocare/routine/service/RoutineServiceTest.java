@@ -283,7 +283,10 @@ class RoutineServiceTest {
 	}
 
 	@Test
-	void 루틴_생성_후_오늘_SkinAnalysis_기준으로_추천_성분_생성을_트리거한다() {
+	void 루틴_생성_자체는_더_이상_추천_성분_생성을_트리거하지_않는다() {
+		// 피부 분석 응답 속도 개선: 추천 성분/제품 생성 트리거는 SkinAnalysisService.analyzeSkin()으로
+		// 옮겨져 루틴 생성과 완전히 분리됐다. generateRoutines()는 이제 ingredientRecommendationService를
+		// 전혀 호출하지 않는다(getTodayRoutines() 조회 경로만 계속 사용한다).
 		mockUser(2000);
 		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
 
@@ -292,24 +295,7 @@ class RoutineServiceTest {
 
 		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
 
-		verify(ingredientRecommendationService).generateTodayRecommendation(USER_ID, skinAnalysis);
-	}
-
-	@Test
-	void 추천_성분_생성이_실패해도_이미_계산된_루틴_저장에는_영향이_없다() {
-		// 요구사항: 성분 추천/제품 검색 실패가 기존 루틴 기능을 절대 깨뜨리면 안 된다.
-		mockUser(2000);
-		when(reportService.getPrimaryCauseFactors(any())).thenReturn(List.of());
-		org.mockito.Mockito.doThrow(new RuntimeException("AI 실패"))
-				.when(ingredientRecommendationService).generateTodayRecommendation(any(), any());
-
-		Checkin checkin = checkin(6.5, 2, 1900);
-		SkinAnalysis skinAnalysis = skinAnalysisWithLevel(SkinAnalysisLevel.SAFE);
-
-		routineService.generateRoutines(USER_ID, checkin, skinAnalysis, mockReport());
-
-		List<Routine> saved = captureSavedRoutines();
-		assertThat(saved).hasSize(4); // 루틴은 정상적으로 저장됨
+		verifyNoInteractions(ingredientRecommendationService);
 	}
 
 	@Test

@@ -1,8 +1,16 @@
 package com.sangmyungyaho.barocare.user.service;
 
+import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.global.security.repository.RefreshTokenRepository;
+import com.sangmyungyaho.barocare.global.storage.ImageStorageService;
+import com.sangmyungyaho.barocare.report.repository.ReportRepository;
+import com.sangmyungyaho.barocare.routine.repository.RoutineRepository;
+import com.sangmyungyaho.barocare.skin.entity.SkinImage;
+import com.sangmyungyaho.barocare.skin.repository.SkinAnalysisRepository;
+import com.sangmyungyaho.barocare.skin.repository.SkinComparisonRepository;
+import com.sangmyungyaho.barocare.skin.repository.SkinImageRepository;
 import com.sangmyungyaho.barocare.user.dto.AgreementRequestDto;
 import com.sangmyungyaho.barocare.user.dto.OnboardingAgreementRequestDto;
 import com.sangmyungyaho.barocare.user.dto.OnboardingStatusResponseDto;
@@ -21,10 +29,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -50,6 +61,27 @@ class UserServiceTest {
 
 	@Mock
 	private RefreshTokenRepository refreshTokenRepository;
+
+	@Mock
+	private CheckinRepository checkinRepository;
+
+	@Mock
+	private RoutineRepository routineRepository;
+
+	@Mock
+	private SkinAnalysisRepository skinAnalysisRepository;
+
+	@Mock
+	private SkinImageRepository skinImageRepository;
+
+	@Mock
+	private SkinComparisonRepository skinComparisonRepository;
+
+	@Mock
+	private ReportRepository reportRepository;
+
+	@Mock
+	private ImageStorageService imageStorageService;
 
 	@InjectMocks
 	private UserService userService;
@@ -121,6 +153,39 @@ class UserServiceTest {
 				.isInstanceOf(GlobalException.class)
 				.extracting(e -> ((GlobalException) e).getErrorCode())
 				.isEqualTo(ErrorCode.USER_NOT_FOUND);
+	}
+
+	@Test
+	void 회원_탈퇴시_남아있는_이미지_파일을_모두_삭제한_뒤_DB_데이터를_정리한다() {
+		User user = newUser();
+		when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+		SkinImage image1 = new SkinImage(USER_ID, "http://example.com/a.jpg", "a.jpg");
+		SkinImage image2 = new SkinImage(USER_ID, "http://example.com/b.jpg", "b.jpg");
+		when(skinImageRepository.findAllByUserId(USER_ID)).thenReturn(List.of(image1, image2));
+
+		userService.withdraw(USER_ID, new WithdrawRequestDto());
+
+		verify(imageStorageService).delete("skin-images", "a.jpg");
+		verify(imageStorageService).delete("skin-images", "b.jpg");
+		verify(skinImageRepository).deleteAllByUserId(USER_ID);
+		verify(userRepository).delete(user);
+	}
+
+	@Test
+	void 회원_탈퇴시_이미지_파일_삭제가_실패해도_탈퇴_처리는_계속_진행된다() {
+		User user = newUser();
+		when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+		SkinImage image = new SkinImage(USER_ID, "http://example.com/a.jpg", "a.jpg");
+		when(skinImageRepository.findAllByUserId(USER_ID)).thenReturn(List.of(image));
+		doThrow(new RuntimeException("디스크 IO 오류"))
+				.when(imageStorageService).delete("skin-images", "a.jpg");
+
+		userService.withdraw(USER_ID, new WithdrawRequestDto());
+
+		verify(skinImageRepository).deleteAllByUserId(USER_ID);
+		verify(userRepository).delete(user);
 	}
 
 	@Test

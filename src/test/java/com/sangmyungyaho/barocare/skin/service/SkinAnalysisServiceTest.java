@@ -2,14 +2,11 @@ package com.sangmyungyaho.barocare.skin.service;
 
 import com.sangmyungyaho.barocare.ai.client.AiClient;
 import com.sangmyungyaho.barocare.ai.dto.AiDto;
-import com.sangmyungyaho.barocare.checkin.entity.Checkin;
-import com.sangmyungyaho.barocare.checkin.repository.CheckinRepository;
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
 import com.sangmyungyaho.barocare.global.storage.ImageStorageService;
-import com.sangmyungyaho.barocare.report.entity.Report;
-import com.sangmyungyaho.barocare.report.service.ReportService;
-import com.sangmyungyaho.barocare.routine.service.RoutineService;
+import com.sangmyungyaho.barocare.routine.entity.RecommendationStatus;
+import com.sangmyungyaho.barocare.routine.service.IngredientRecommendationService;
 import com.sangmyungyaho.barocare.skin.dto.SkinAnalysisDto;
 import com.sangmyungyaho.barocare.skin.entity.FaceRegion;
 import com.sangmyungyaho.barocare.skin.entity.ImageQualityRating;
@@ -37,7 +34,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -74,13 +70,10 @@ class SkinAnalysisServiceTest {
 	private UserRepository userRepository;
 
 	@Mock
-	private CheckinRepository checkinRepository;
+	private SkinAnalysisFollowUpService skinAnalysisFollowUpService;
 
 	@Mock
-	private ReportService reportService;
-
-	@Mock
-	private RoutineService routineService;
+	private IngredientRecommendationService ingredientRecommendationService;
 
 	@InjectMocks
 	private SkinAnalysisService skinAnalysisService;
@@ -156,8 +149,6 @@ class SkinAnalysisServiceTest {
 		when(skinGradeRubric.calculateTroubleLevel(eq(aiResult.trouble()), any())).thenReturn(SkinAnalysisLevel.CAUTION);
 		when(skinGradeRubric.calculateSkinLevel(SkinAnalysisLevel.SAFE, SkinAnalysisLevel.CAUTION)).thenReturn(SkinAnalysisLevel.CAUTION);
 		when(skinAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-		// 오늘 체크인이 없는 상황(순서를 어기고 사진부터 분석) - 리포트/루틴 생성은 건너뛰어야 한다.
-		when(checkinRepository.findByUserIdAndCheckedDate(eq(USER_ID), any())).thenReturn(Optional.empty());
 
 		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
 		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(USER_ID, request);
@@ -167,13 +158,19 @@ class SkinAnalysisServiceTest {
 		assertThat(response.trouble()).isEqualTo(SkinAnalysisLevel.CAUTION);
 		assertThat(response.skinLevel()).isEqualTo(SkinAnalysisLevel.CAUTION);
 		verify(skinAnalysisRepository).save(any());
-		verifyNoInteractions(reportService, routineService);
+		// 정책: 분석이 성공적으로 저장된 후에는 원본 이미지 파일을 삭제한다.
+		verify(imageStorageService).delete("skin-images", "mine.jpg");
 	}
 
 	@Test
-	void 오늘_체크인이_있으면_분석_저장_후_오늘_리포트와_루틴을_생성한다() {
-		// 요구사항 #6: Checkin -> SkinImage -> SkinAnalysis -> Report -> Routine 순서로, 피부 분석
-		// 완료 시점에 오늘 Report/Routine 생성까지 이어지는지 검증한다.
+	void 분석_저장_후_오늘_리포트_루틴_생성을_동기로_위임하고_추천_생성을_백그라운드로_트리거한다() {
+		// 요구사항: "피부 분석 + 원인 분석 + 오늘의 루틴까지" 완료된 뒤에 응답해야 하므로
+		// SkinAnalysisFollowUpService 호출은 동기다(응답 전에 끝나야 함). 반면 추천 성분/제품 생성은
+		// 응답을 기다리지 않는 별도 백그라운드 작업이라 initializeTodayRecommendation(동기, PENDING
+		// row 선점)과 generateTodayRecommendation(@Async)을 함께 트리거한다. 실제 체크인 조회/리포트/
+		// 루틴 생성, 성분/제품 생성 로직 자체는 각각 SkinAnalysisFollowUpServiceTest/
+		// IngredientRecommendationServiceTest에서 검증한다 - 여기서는 "저장된 SkinAnalysis와 함께
+		// 두 위임 호출이 모두 일어난다"는 경계만 검증한다.
 		SkinImage myImage = new SkinImage(USER_ID, "http://example.com/mine.jpg", "mine.jpg");
 		ReflectionTestUtils.setField(myImage, "id", 55L);
 		when(skinImageRepository.findById(55L)).thenReturn(Optional.of(myImage));
@@ -189,22 +186,19 @@ class SkinAnalysisServiceTest {
 		when(skinGradeRubric.calculateTroubleLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
 		when(skinGradeRubric.calculateSkinLevel(SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE)).thenReturn(SkinAnalysisLevel.SAFE);
 		when(skinAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-
-		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.now());
-		when(checkinRepository.findByUserIdAndCheckedDate(eq(USER_ID), any())).thenReturn(Optional.of(todayCheckin));
-		Report report = mock(Report.class);
-		when(reportService.generateTodayReport(eq(USER_ID), any(), eq(todayCheckin))).thenReturn(report);
 
 		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
 		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(USER_ID, request);
 
 		assertThat(response.skinImageId()).isEqualTo(myImage.getId());
-		verify(reportService).generateTodayReport(eq(USER_ID), any(), eq(todayCheckin));
-		verify(routineService).generateRoutines(eq(USER_ID), eq(todayCheckin), any(), eq(report));
+		verify(skinAnalysisFollowUpService).generateTodayReportAndRoutines(eq(USER_ID), any());
+		verify(ingredientRecommendationService).initializeTodayRecommendation(eq(USER_ID), any());
+		verify(ingredientRecommendationService).generateTodayRecommendation(eq(USER_ID), any());
+		verify(imageStorageService).delete("skin-images", "mine.jpg");
 	}
 
 	@Test
-	void 오늘_리포트_루틴_생성이_실패해도_피부_분석_저장_응답은_영향받지_않는다() {
+	void 리포트_루틴_위임_호출이_예외를_던져도_피부_분석_저장_응답은_영향받지_않는다() {
 		SkinImage myImage = new SkinImage(USER_ID, "http://example.com/mine.jpg", "mine.jpg");
 		ReflectionTestUtils.setField(myImage, "id", 55L);
 		when(skinImageRepository.findById(55L)).thenReturn(Optional.of(myImage));
@@ -220,18 +214,137 @@ class SkinAnalysisServiceTest {
 		when(skinGradeRubric.calculateTroubleLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
 		when(skinGradeRubric.calculateSkinLevel(SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE)).thenReturn(SkinAnalysisLevel.SAFE);
 		when(skinAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-
-		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.now());
-		when(checkinRepository.findByUserIdAndCheckedDate(eq(USER_ID), any())).thenReturn(Optional.of(todayCheckin));
-		when(reportService.generateTodayReport(eq(USER_ID), any(), eq(todayCheckin)))
-				.thenThrow(new GlobalException(ErrorCode.AI_ANALYSIS_FAILED));
+		org.mockito.Mockito.doThrow(new RuntimeException("체크인 조회 중 오류"))
+				.when(skinAnalysisFollowUpService).generateTodayReportAndRoutines(eq(USER_ID), any());
 
 		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
 		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(USER_ID, request);
 
 		assertThat(response).isNotNull();
 		assertThat(response.skinImageId()).isEqualTo(myImage.getId());
-		verify(routineService, never()).generateRoutines(any(), any(), any(), any());
+		// 리포트/루틴 위임이 실패해도 추천 생성 트리거는 별개로 계속 시도돼야 한다.
+		verify(ingredientRecommendationService).generateTodayRecommendation(eq(USER_ID), any());
+		verify(imageStorageService).delete("skin-images", "mine.jpg");
+	}
+
+	@Test
+	void 추천_생성_트리거_자체가_동기적으로_실패해도_피부_분석_저장_응답은_영향받지_않는다() {
+		// 스레드풀 큐가 가득 찬 경우(TaskRejectedException 등) @Async 메서드가 시작되기도 전에
+		// 호출부에서 동기적으로 예외가 날 수 있다 - 이 경우에도 피부 분석 저장 응답 자체는 항상
+		// 성공해야 한다(SkinAnalysisService의 방어적 try/catch 검증).
+		SkinImage myImage = new SkinImage(USER_ID, "http://example.com/mine.jpg", "mine.jpg");
+		ReflectionTestUtils.setField(myImage, "id", 55L);
+		when(skinImageRepository.findById(55L)).thenReturn(Optional.of(myImage));
+		when(imageStorageService.load("skin-images", "mine.jpg")).thenReturn(Optional.of(new byte[]{1, 2, 3}));
+
+		AiDto.SkinAnalysisResult aiResult = new AiDto.SkinAnalysisResult(
+				new AiDto.RednessObservation(List.of(), null),
+				new AiDto.TroubleObservation(List.of(), null),
+				new AiDto.ImageQuality(ImageQualityRating.GOOD, ImageQualityRating.GOOD, ImageQualityRating.GOOD, ImageQualityRating.GOOD)
+		);
+		when(aiClient.analyzeSkin(any(), any())).thenReturn(aiResult);
+		when(skinGradeRubric.calculateRednessLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinGradeRubric.calculateTroubleLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinGradeRubric.calculateSkinLevel(SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE)).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+		org.mockito.Mockito.doThrow(new org.springframework.core.task.TaskRejectedException("풀 포화"))
+				.when(ingredientRecommendationService).generateTodayRecommendation(eq(USER_ID), any());
+
+		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
+		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(USER_ID, request);
+
+		assertThat(response).isNotNull();
+		assertThat(response.skinImageId()).isEqualTo(myImage.getId());
+		verify(imageStorageService).delete("skin-images", "mine.jpg");
+	}
+
+	@Test
+	void 본인_소유_분석의_추천_성분_상태를_조회하면_소유권_검증_후_그대로_위임한다() {
+		SkinAnalysis analysis = analysisAt(LocalDate.of(2026, 8, 10), SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE);
+		ReflectionTestUtils.setField(analysis, "id", 12L);
+		when(skinAnalysisRepository.findById(12L)).thenReturn(Optional.of(analysis));
+		var expected = com.sangmyungyaho.barocare.routine.dto.IngredientRecommendationDto.IngredientStatusResponse.of(
+				RecommendationStatus.PROCESSING, List.of());
+		when(ingredientRecommendationService.getIngredientStatus(12L)).thenReturn(expected);
+
+		var response = skinAnalysisService.getIngredientRecommendationStatus(USER_ID, 12L);
+
+		assertThat(response).isEqualTo(expected);
+	}
+
+	@Test
+	void 다른_사용자의_분석에_대한_추천_성분_상태_조회는_FORBIDDEN을_던진다() {
+		SkinAnalysis othersAnalysis = analysisAt(LocalDate.of(2026, 8, 10), SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE);
+		ReflectionTestUtils.setField(othersAnalysis, "id", 12L);
+		ReflectionTestUtils.setField(othersAnalysis, "userId", OTHER_USER_ID);
+		when(skinAnalysisRepository.findById(12L)).thenReturn(Optional.of(othersAnalysis));
+
+		assertThatThrownBy(() -> skinAnalysisService.getIngredientRecommendationStatus(USER_ID, 12L))
+				.isInstanceOf(GlobalException.class)
+				.extracting(e -> ((GlobalException) e).getErrorCode())
+				.isEqualTo(ErrorCode.FORBIDDEN);
+		verifyNoInteractions(ingredientRecommendationService);
+	}
+
+	@Test
+	void 존재하지_않는_분석의_추천_제품_상태_조회는_SKIN_ANALYSIS_NOT_FOUND를_던진다() {
+		when(skinAnalysisRepository.findById(999L)).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> skinAnalysisService.getProductRecommendationStatus(USER_ID, 999L))
+				.isInstanceOf(GlobalException.class)
+				.extracting(e -> ((GlobalException) e).getErrorCode())
+				.isEqualTo(ErrorCode.SKIN_ANALYSIS_NOT_FOUND);
+		verifyNoInteractions(ingredientRecommendationService);
+	}
+
+	@Test
+	void 원본_이미지_삭제가_실패해도_분석_결과_저장_응답은_영향받지_않는다() {
+		// 요구사항: 원본 파일 삭제 실패가 이미 끝난 SkinAnalysis 저장을 롤백시키면 안 된다.
+		SkinImage myImage = new SkinImage(USER_ID, "http://example.com/mine.jpg", "mine.jpg");
+		ReflectionTestUtils.setField(myImage, "id", 55L);
+		when(skinImageRepository.findById(55L)).thenReturn(Optional.of(myImage));
+		when(imageStorageService.load("skin-images", "mine.jpg")).thenReturn(Optional.of(new byte[]{1, 2, 3}));
+
+		AiDto.SkinAnalysisResult aiResult = new AiDto.SkinAnalysisResult(
+				new AiDto.RednessObservation(List.of(), null),
+				new AiDto.TroubleObservation(List.of(), null),
+				new AiDto.ImageQuality(ImageQualityRating.GOOD, ImageQualityRating.GOOD, ImageQualityRating.GOOD, ImageQualityRating.GOOD)
+		);
+		when(aiClient.analyzeSkin(any(), any())).thenReturn(aiResult);
+		when(skinGradeRubric.calculateRednessLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinGradeRubric.calculateTroubleLevel(any(), any())).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinGradeRubric.calculateSkinLevel(SkinAnalysisLevel.SAFE, SkinAnalysisLevel.SAFE)).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+		when(imageStorageService.delete("skin-images", "mine.jpg"))
+				.thenThrow(new RuntimeException("디스크 IO 오류"));
+
+		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
+		SkinAnalysisDto.Response response = skinAnalysisService.analyzeSkin(USER_ID, request);
+
+		assertThat(response).isNotNull();
+		assertThat(response.skinAnalysisId()).isNull(); // save()가 mock이라 id는 채워지지 않지만 응답 자체는 정상 반환됨을 확인
+		verify(skinAnalysisRepository).save(any());
+	}
+
+	@Test
+	void 이미지_품질이_부족해_분석이_실패하면_원본_이미지를_삭제하지_않는다() {
+		SkinImage myImage = new SkinImage(USER_ID, "http://example.com/mine.jpg", "mine.jpg");
+		when(skinImageRepository.findById(55L)).thenReturn(Optional.of(myImage));
+		when(imageStorageService.load("skin-images", "mine.jpg")).thenReturn(Optional.of(new byte[]{1, 2, 3}));
+
+		AiDto.SkinAnalysisResult aiResult = new AiDto.SkinAnalysisResult(
+				new AiDto.RednessObservation(List.of(), null),
+				new AiDto.TroubleObservation(List.of(), null),
+				new AiDto.ImageQuality(ImageQualityRating.POOR, ImageQualityRating.POOR, ImageQualityRating.GOOD, ImageQualityRating.GOOD)
+		);
+		when(aiClient.analyzeSkin(any(), any())).thenReturn(aiResult);
+
+		SkinAnalysisDto.Request request = new SkinAnalysisDto.Request(55L);
+
+		assertThatThrownBy(() -> skinAnalysisService.analyzeSkin(USER_ID, request))
+				.isInstanceOf(GlobalException.class);
+
+		verify(imageStorageService, never()).delete(any(), any());
 	}
 
 	@Test
@@ -277,6 +390,7 @@ class SkinAnalysisServiceTest {
 				.isEqualTo(ErrorCode.AI_ANALYSIS_FAILED);
 
 		verify(skinAnalysisRepository, never()).save(any());
+		verify(imageStorageService, never()).delete(any(), any());
 	}
 
 	@Test

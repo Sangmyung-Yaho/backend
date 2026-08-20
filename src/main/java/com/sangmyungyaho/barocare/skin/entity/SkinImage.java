@@ -15,6 +15,13 @@ import java.time.Instant;
 
 /**
  * 피부 분석용 얼굴 이미지 엔티티.
+ *
+ * 원본 이미지 보관 정책: 이 엔티티가 가리키는 원본 파일은 피부 분석(SkinAnalysis) 용도로만
+ * 임시 저장된다. 분석이 성공적으로 끝나면 SkinAnalysisService가 원본 파일을 즉시 삭제하고,
+ * 분석 없이 방치된 이미지는 SkinImageCleanupService가 주기적으로 정리한다. 즉 row 자체는
+ * (분석 기록의 참조 대상으로) 계속 남지만, imageUrl/storedFileName이 가리키는 실제 파일은
+ * 분석 이후 더 이상 존재하지 않을 수 있다 - 두 값을 다시 읽어 파일에 접근하려는 코드는 이
+ * 사실을 감안해야 한다(ImageStorageService.load()는 파일이 없으면 Optional.empty()를 반환한다).
  */
 @Entity
 @Table(name = "skin_image")

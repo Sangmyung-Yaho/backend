@@ -2,6 +2,8 @@ package com.sangmyungyaho.barocare.user.service;
 
 import com.sangmyungyaho.barocare.global.exception.ErrorCode;
 import com.sangmyungyaho.barocare.global.exception.GlobalException;
+import com.sangmyungyaho.barocare.global.storage.ImageStorageService;
+import com.sangmyungyaho.barocare.skin.entity.SkinImage;
 import com.sangmyungyaho.barocare.user.dto.OnboardingAgreementRequestDto;
 import com.sangmyungyaho.barocare.user.dto.OnboardingStatusResponseDto;
 import com.sangmyungyaho.barocare.user.dto.PhotoGuideAgreementRequestDto;
@@ -19,12 +21,21 @@ import com.sangmyungyaho.barocare.skin.repository.SkinComparisonRepository;
 import com.sangmyungyaho.barocare.report.repository.ReportRepository;
 import com.sangmyungyaho.barocare.user.repository.WithdrawalLogRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
 public class UserService {
+
+    private static final Logger logger = LoggerFactory.getLogger(UserService.class);
+
+    // SkinImageService/SkinAnalysisService와 동일한 저장 하위 경로.
+    private static final String SKIN_IMAGE_DIRECTORY = "skin-images";
 
     private final UserRepository userRepository;
     private final WithdrawalLogRepository withdrawalLogRepository;
@@ -35,6 +46,7 @@ public class UserService {
     private final SkinImageRepository skinImageRepository;
     private final SkinComparisonRepository skinComparisonRepository;
     private final ReportRepository reportRepository;
+    private final ImageStorageService imageStorageService;
 
     @Transactional(readOnly = true)
     public OnboardingStatusResponseDto getOnboardingStatus(Long userId) {
@@ -177,9 +189,20 @@ public class UserService {
         WithdrawalLog log = new WithdrawalLog(userId, request.getWithdrawalReason());
         withdrawalLogRepository.save(log);
 
-        // TODO: S3 이미지 즉시 삭제 처리 로직 추가 필요
-        // SkinImage/SkinAnalysis 모두 userId를 보유하므로 조회 자체는 가능하다.
-        // 여기서 ImageStorageService.delete(...) 호출을 통해 해당 유저의 이미지를 동기 삭제해야 한다.
+        // 원본 이미지 파일 삭제. 정책상 분석 성공 시 SkinAnalysisService가 즉시 지우므로 탈퇴 시점에
+        // 남아있는 건 보통 "업로드만 하고 분석하지 않은" 이미지뿐이지만, 정리 배치 주기 전에 탈퇴하는
+        // 경우까지 커버하기 위해 DB row를 지우기 전에 먼저 파일을 지운다. 파일 삭제는 best-effort이며
+        // 실패해도(로그만 남기고) 탈퇴 자체는 계속 진행한다.
+        List<SkinImage> remainingImages = skinImageRepository.findAllByUserId(userId);
+        for (SkinImage image : remainingImages) {
+            try {
+                imageStorageService.delete(SKIN_IMAGE_DIRECTORY, image.getStoredFileName());
+            } catch (RuntimeException e) {
+                logger.warn("회원 탈퇴 처리 중 원본 이미지 파일 삭제 실패(탈퇴는 계속 진행): "
+                                + "userId={}, skinImageId={}, storedFileName={}",
+                        userId, image.getId(), image.getStoredFileName(), e);
+            }
+        }
 
         // 하위 데이터 명시 삭제 (JPA 연관관계 없이 Long userId로 연결되어 있어 수동 처리 필수)
         reportRepository.deleteAllByCurrentSkinAnalysis_UserId(userId);

@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * 피부 변화 원인 분석 리포트.
@@ -66,6 +67,18 @@ public class ReportService {
 
 	// 분석 메인 화면(GET /api/v1/reports) - date/startDate/endDate가 전부 없을 때 기본으로 조회하는 기간.
 	private static final int DEFAULT_REPORT_LIST_DAYS = 30;
+
+	// IMPROVED/WORSENED/UNCHANGED/INCREASED/DECREASED/STABLE/GOOD/MODERATE/POOR/SAFE/CAUTION/DANGER -
+	// 전부 백엔드 내부 enum 이름이다. 사용자에게 보이는 문장에 이 토큰이 단어 단위로(대소문자 무관) 그대로
+	// 섞여 있으면 AI가 프롬프트 지침을 어긴 것으로 보고 거부한다(validateNoInternalStateLeak).
+	// \b(word boundary)가 아니라 "앞뒤에 영문 알파벳이 없다"는 부정 전후방탐색을 쓴다 - \b는 한글처럼
+	// \w(=[a-zA-Z0-9_])에 속하지 않는 문자와의 경계 판정이 JDK 버전에 따라 달라 이 프로젝트가 쓰는
+	// JDK 17에서는 "POOR이라"처럼 한글이 바로 붙은 경우 매치가 안 되는 문제가 실측으로 확인됐다
+	// (같은 패턴이 JDK 23에서는 매치됨 - java.util.regex의 버전별 동작 차이).
+	private static final Pattern INTERNAL_STATE_LEAK_PATTERN = Pattern.compile(
+			"(?<![A-Za-z])(IMPROVED|WORSENED|UNCHANGED|INCREASED|DECREASED|STABLE|GOOD|MODERATE|POOR|SAFE|CAUTION|DANGER)(?![A-Za-z])",
+			Pattern.CASE_INSENSITIVE
+	);
 
 	private final SkinAnalysisRepository skinAnalysisRepository;
 	private final CheckinRepository checkinRepository;
@@ -185,7 +198,10 @@ public class ReportService {
 			AiDto.CheckinInput checkinInput = buildCheckinInput(todayCheckin, previousCheckins, judgment, candidateFactors);
 
 			log.info("OpenAI 원인 분석 요청 시작: skinAnalysisId={}, candidateFactors={}", todaySkinAnalysis.getId(), candidateFactors);
+			long causeAnalysisStartMs = System.currentTimeMillis();
 			AiDto.CauseAnalysisResult causeAnalysisResult = aiClient.analyzeSkinChangeCauses(skinChangeInput, checkinInput);
+			log.info("[SkinAnalysis] cause analysis completed: {}ms (skinAnalysisId={})",
+					System.currentTimeMillis() - causeAnalysisStartMs, todaySkinAnalysis.getId());
 			validateCauseAnalysisResult(causeAnalysisResult);
 
 			List<ReportDto.PrimaryCause> primaryCauses = causeAnalysisResult.causes().stream()
@@ -200,11 +216,17 @@ public class ReportService {
 					.map(cause -> enrichCause(cause, todayCheckin, judgment))
 					.toList();
 
+			// 최종 summary는 AI가 통째로 쓰지 않는다: 붉은기/트러블 변화 문구와 전체 평가 문구는
+			// rednessStatus/troubleStatus로 여기서 결정적으로 조립하고(내부 enum이 새어나갈 여지 자체가
+			// 없음), AI가 쓴 원인 요인 설명(causeAnalysisResult.summary(), validateCauseAnalysisResult에서
+			// 이미 영어 상태값 노출 여부까지 검증됨)만 마지막에 이어붙인다.
+			String summary = buildSummary(rednessStatus, troubleStatus, causeAnalysisResult.summary());
+
 			Report report = new Report(
 					todaySkinAnalysis, previousOpt.orElse(null), referenceDate,
 					rednessPreviousScore, rednessCurrentScore, rednessStatus,
 					troublePreviousScore, troubleCurrentScore, troubleStatus,
-					toJson(primaryCauses), causeAnalysisResult.summary()
+					toJson(primaryCauses), summary
 			);
 
 			try {
@@ -455,11 +477,17 @@ public class ReportService {
 	// causes 목록 자체뿐 아니라 원소 각각의 필수 필드까지 검증한다. factor가 null이면(구조화 출력이 스키마를
 	// 어기고 필드를 비운 경우) enrichCause의 switch에서 NPE가 나므로, 여기서 먼저 걸러 AI_ANALYSIS_FAILED로
 	// 응답한다. factor는 ReportCauseFactor enum이라 파싱에 성공한 이상 null이 아니면 항상 유효한 값이다.
+	//
+	// 여기서 IMPROVED/POOR 같은 내부 상태값 리터럴 노출 여부도 함께 검증한다(최종 방어선) - 프롬프트로
+	// 금지했지만 LLM이 지침을 어기고 그대로 출력할 수 있으므로, 사용자에게 나가기 전에 한 번 더 막는다.
+	// 형식 오류(필드 누락)와 동일하게 AI_ANALYSIS_FAILED(502)로 처리한다 - 깨진/새어나간 문장을 그대로
+	// 내려주는 것보다, 실패로 취급해 재시도를 유도하는 편이 안전하다.
 	private void validateCauseAnalysisResult(AiDto.CauseAnalysisResult result) {
 		if (result == null || result.causes() == null || result.summary() == null || result.summary().isBlank()) {
 			log.warn("AI 원인 분석 결과 검증 실패: causes/summary 누락 - {}", result);
 			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
 		}
+		validateNoInternalStateLeak(result.summary(), "summary");
 		for (AiDto.Cause cause : result.causes()) {
 			boolean invalid = cause == null
 					|| cause.factor() == null
@@ -469,7 +497,77 @@ public class ReportService {
 				log.warn("AI 원인 분석 결과 검증 실패: cause 필드 누락 - {}", cause);
 				throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
 			}
+			validateNoInternalStateLeak(cause.name(), "cause.name");
+			validateNoInternalStateLeak(cause.description(), "cause.description");
 		}
+	}
+
+	private void validateNoInternalStateLeak(String text, String fieldName) {
+		if (text != null && INTERNAL_STATE_LEAK_PATTERN.matcher(text).find()) {
+			log.warn("AI 응답에 내부 상태값이 그대로 노출되어 거부함: field={}, text={}", fieldName, text);
+			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+		}
+	}
+
+	/**
+	 * 리포트 summary 조립(REP-101 문구 개선). 붉은기/트러블의 변화 문구와 전체 평가 문구는 AI에 맡기지
+	 * 않고 rednessStatus/troubleStatus만으로 결정적으로 만든다 - 내부 enum이 문장에 새어나갈 여지 자체가
+	 * 없고, "화면에 이미 표시되는 등급을 본문에서 반복하지 않는다"는 요구사항도 자연스럽게 지켜진다
+	 * (등급 라벨 자체를 아예 언급하지 않고 변화 방향만 서술하기 때문). 마지막 문장(원인 요인 설명)만
+	 * AI가 작성한 causesSentence를 그대로 붙인다(이미 validateCauseAnalysisResult에서 내부 상태값 노출
+	 * 여부를 검증했다). 총 2~3문장: [변화 문구] + [전체 평가 문구(첫 분석이면 생략)] + [원인 요인 설명].
+	 */
+	private String buildSummary(ReportChangeStatus rednessStatus, ReportChangeStatus troubleStatus, String causesSentence) {
+		StringBuilder summary = new StringBuilder(buildChangeSentence(rednessStatus, troubleStatus));
+		String overallSentence = buildOverallSentence(rednessStatus, troubleStatus);
+		if (overallSentence != null) {
+			summary.append(' ').append(overallSentence);
+		}
+		if (causesSentence != null && !causesSentence.isBlank()) {
+			summary.append(' ').append(causesSentence.strip());
+		}
+		return summary.toString();
+	}
+
+	// 붉은기/트러블 변화 문구. rednessStatus/troubleStatus는 generateTodayReport에서 둘 다 null이거나
+	// 둘 다 non-null로만 계산되므로(직전 분석 유무에 따라 함께 결정됨) 한쪽만 null인 경우는 없다.
+	private String buildChangeSentence(ReportChangeStatus rednessStatus, ReportChangeStatus troubleStatus) {
+		if (rednessStatus == null || troubleStatus == null) {
+			return "이번이 첫 피부 분석이라 아직 이전 기록과 비교할 변화는 없어요.";
+		}
+		if (rednessStatus == troubleStatus) {
+			return switch (rednessStatus) {
+				case IMPROVED -> "붉은기와 트러블이 모두 이전보다 감소했어요.";
+				case WORSENED -> "붉은기와 트러블이 모두 이전보다 증가했어요.";
+				case UNCHANGED -> "붉은기와 트러블에 큰 변화가 없어요.";
+			};
+		}
+		return "붉은기는 " + changeDescription(rednessStatus) + ", 트러블은 " + changeDescription(troubleStatus) + ".";
+	}
+
+	// buildChangeSentence의 "둘의 상태가 다른 경우" 분기 전용. 문장을 직접 끝맺는 동사형으로 반환한다
+	// (명사형 + "이에요"를 붙이면 "트러블은 이전보다 증가이에요."처럼 어색해지는 문제가 있었다).
+	private String changeDescription(ReportChangeStatus status) {
+		return switch (status) {
+			case IMPROVED -> "이전보다 감소했어요";
+			case WORSENED -> "이전보다 증가했어요";
+			case UNCHANGED -> "큰 변화 없이 유지되고 있어요";
+		};
+	}
+
+	// 전체 평가 문구. 둘 중 하나라도 악화면 악화 문구를 우선한다(보수적으로 - 과도한 안심 방지).
+	// 첫 분석(비교 대상 없음)이면 평가할 변화 자체가 없으므로 생략한다(null 반환 -> buildSummary가 건너뜀).
+	private String buildOverallSentence(ReportChangeStatus rednessStatus, ReportChangeStatus troubleStatus) {
+		if (rednessStatus == null || troubleStatus == null) {
+			return null;
+		}
+		if (rednessStatus == ReportChangeStatus.WORSENED || troubleStatus == ReportChangeStatus.WORSENED) {
+			return "최근 피부 상태가 다소 악화된 모습이에요.";
+		}
+		if (rednessStatus == ReportChangeStatus.IMPROVED || troubleStatus == ReportChangeStatus.IMPROVED) {
+			return "피부 상태가 전반적으로 좋아지고 있어요.";
+		}
+		return "현재 피부 상태가 비슷하게 유지되고 있어요.";
 	}
 
 	private String toJson(List<ReportDto.PrimaryCause> primaryCauses) {

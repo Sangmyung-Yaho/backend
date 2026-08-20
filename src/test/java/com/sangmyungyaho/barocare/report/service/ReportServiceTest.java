@@ -196,50 +196,152 @@ class ReportServiceTest {
 		assertThat(capturedSkinChange.troubleDirection()).isEqualTo(ChangeDirection.DECREASED);
 	}
 
-	// ---------- 리포트 기준일(reportDate) = 체크인 checkedDate (타임존 버그 회귀 테스트) ----------
+	// ---------- 리포트 문구(summary) 자연어 생성 검증 ----------
 	//
-	// 배경: reportDate가 과거 SkinAnalysis.analyzedAt(@CreationTimestamp)에서 파생되던 시절에는,
-	// 컨테이너/DB의 타임존 초기화 순서 문제로 KST 자정 근처(00:00~09:00)에 분석하면 analyzedAt이
-	// UTC 기준으로 생성되어 reportDate가 하루(또는 그 이상) 전 날짜로 저장되는 버그가 있었다.
-	// 지금은 reportDate가 todayCheckin.getCheckedDate()를 그대로 쓰므로, analyzedAt에 어떤 값이
-	// 들어있든(심지어 예전 버그를 그대로 재현한 값이든) reportDate는 영향을 받지 않아야 한다.
-	// 실제 자정을 기다리거나 시스템 시계를 조작하지 않고도 결정적으로 검증 가능한 이유가 이것이다.
+	// summary는 더 이상 AI가 통째로 쓰지 않는다: 붉은기/트러블 변화 문구·전체 평가 문구는 rednessStatus/
+	// troubleStatus만으로 ReportService가 결정적으로 조립하고(내부 enum이 새어나갈 여지 자체가 없음),
+	// AI는 원인 요인 설명 한 문장만 덧붙인다. 아래 세 테스트는 정확한 문구 조립을, 그 아래 두 테스트는
+	// AI가 지침을 어기고 영어 상태값을 그대로 반환했을 때 최종 방어선(validateNoInternalStateLeak)이
+	// 작동하는지를 검증한다.
 
 	@Test
-	void 자정_직전_체크인_8월19일_23시59분_이면_analyzedAt과_무관하게_리포트_날짜는_체크인_날짜를_따른다() {
-		Long todayId = 50L;
+	void 개선_케이스면_감소_문구와_좋아지고_있다는_문구와_원인_요인_설명이_조립된다() {
+		Long todayId = 60L;
 		SkinAnalysis today = skinAnalysisWithId(todayId);
-		// 8/19 23:59 KST에 분석한 정상 케이스를 그대로 반영: analyzedAt도 8/19.
-		lenient().when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 19, 23, 59));
-		lenient().when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
-		lenient().when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		SkinAnalysis previous = skinAnalysisWithId(59L);
+		when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 10, 9, 0));
+		when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(previous.getRednessLevel()).thenReturn(SkinAnalysisLevel.CAUTION);
+		when(previous.getTroubleLevel()).thenReturn(SkinAnalysisLevel.CAUTION);
 		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, today.getAnalyzedAt()))
-				.thenReturn(Optional.empty());
+				.thenReturn(Optional.of(previous));
 		when(reportRepository.findByCurrentSkinAnalysis_Id(todayId)).thenReturn(Optional.empty());
 		when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
-		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.of(2026, 8, 19));
-		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 19)))
+		Checkin todayCheckin = new Checkin(USER_ID, 5.0, 4, 800, LocalDate.of(2026, 8, 10));
+		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 10)))
 				.thenReturn(List.of());
-		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(List.of(), "요약"));
+		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(
+				List.of(), "최근 기록에서는 스트레스와 수분 섭취가 피부 변화에 영향을 준 주요 요인으로 보여요."));
 		when(objectMapper.writeValueAsString(any())).thenReturn("[]");
 		ArgumentCaptor<Report> reportCaptor = ArgumentCaptor.forClass(Report.class);
 		when(reportRepository.save(reportCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
 
 		reportService.generateTodayReport(USER_ID, today, todayCheckin);
 
-		assertThat(reportCaptor.getValue().getReportDate()).isEqualTo(LocalDate.of(2026, 8, 19));
-		verify(checkinRepository).findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 19));
+		assertThat(reportCaptor.getValue().getSummary()).isEqualTo(
+				"붉은기와 트러블이 모두 이전보다 감소했어요. 피부 상태가 전반적으로 좋아지고 있어요. "
+						+ "최근 기록에서는 스트레스와 수분 섭취가 피부 변화에 영향을 준 주요 요인으로 보여요."
+		);
 	}
 
 	@Test
-	void 자정_직후_체크인_8월20일_00시01분_이면_analyzedAt이_타임존_버그로_전날짜여도_리포트_날짜는_체크인_날짜를_따른다() {
-		Long todayId = 51L;
+	void 변화없음_케이스면_큰_변화없다는_문구와_비슷하게_유지된다는_문구가_조립된다() {
+		Long todayId = 61L;
 		SkinAnalysis today = skinAnalysisWithId(todayId);
-		// 수정 전 버그를 그대로 재현: KST 8/20 00:01에 분석했는데 UTC 기준으로 생성되어
-		// analyzedAt이 8/19로 저장된 상황(이중 보정 버그의 실제 관측값과 동일한 패턴).
-		// reportDate가 이 값의 영향을 받지 않는지가 이 테스트의 핵심이다.
-		lenient().when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 19, 15, 1));
+		SkinAnalysis previous = skinAnalysisWithId(60L);
+		when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 10, 9, 0));
+		when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(previous.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(previous.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, today.getAnalyzedAt()))
+				.thenReturn(Optional.of(previous));
+		when(reportRepository.findByCurrentSkinAnalysis_Id(todayId)).thenReturn(Optional.empty());
+		when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.of(2026, 8, 10));
+		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 10)))
+				.thenReturn(List.of());
+		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(
+				List.of(), "최근 기록에서는 특별히 두드러진 위험 요인은 보이지 않아요."));
+		when(objectMapper.writeValueAsString(any())).thenReturn("[]");
+		ArgumentCaptor<Report> reportCaptor = ArgumentCaptor.forClass(Report.class);
+		when(reportRepository.save(reportCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		reportService.generateTodayReport(USER_ID, today, todayCheckin);
+
+		assertThat(reportCaptor.getValue().getSummary()).isEqualTo(
+				"붉은기와 트러블에 큰 변화가 없어요. 현재 피부 상태가 비슷하게 유지되고 있어요. "
+						+ "최근 기록에서는 특별히 두드러진 위험 요인은 보이지 않아요."
+		);
+	}
+
+	@Test
+	void 악화_케이스면_증가_문구와_다소_악화된_모습이라는_문구가_조립된다() {
+		Long todayId = 62L;
+		SkinAnalysis today = skinAnalysisWithId(todayId);
+		SkinAnalysis previous = skinAnalysisWithId(61L);
+		when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 10, 9, 0));
+		when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.CAUTION);
+		when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.CAUTION);
+		when(previous.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(previous.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, today.getAnalyzedAt()))
+				.thenReturn(Optional.of(previous));
+		when(reportRepository.findByCurrentSkinAnalysis_Id(todayId)).thenReturn(Optional.empty());
+		when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+		Checkin todayCheckin = new Checkin(USER_ID, 5.0, 4, 800, LocalDate.of(2026, 8, 10));
+		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 10)))
+				.thenReturn(List.of());
+		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(
+				List.of(), "최근 기록에서는 수면 부족과 스트레스가 피부 변화에 영향을 준 요인으로 보여요."));
+		when(objectMapper.writeValueAsString(any())).thenReturn("[]");
+		ArgumentCaptor<Report> reportCaptor = ArgumentCaptor.forClass(Report.class);
+		when(reportRepository.save(reportCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		reportService.generateTodayReport(USER_ID, today, todayCheckin);
+
+		assertThat(reportCaptor.getValue().getSummary()).isEqualTo(
+				"붉은기와 트러블이 모두 이전보다 증가했어요. 최근 피부 상태가 다소 악화된 모습이에요. "
+						+ "최근 기록에서는 수면 부족과 스트레스가 피부 변화에 영향을 준 요인으로 보여요."
+		);
+	}
+
+	@Test
+	void 붉은기와_트러블_상태가_서로_다르면_각각_따로_서술한다() {
+		// 리뷰 중 발견: 이 분기(둘의 상태가 다른 경우)가 테스트로 커버되지 않았었다. changeDescription()이
+		// 명사형("이전보다 감소")을 반환하고 buildChangeSentence가 그 뒤에 "이에요"를 붙이던 예전 구현은
+		// "트러블은 이전보다 증가이에요."처럼 문법이 깨졌다 - 지금은 동사형을 직접 반환하도록 고쳤다.
+		Long todayId = 63L;
+		SkinAnalysis today = skinAnalysisWithId(todayId);
+		SkinAnalysis previous = skinAnalysisWithId(62L);
+		when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 10, 9, 0));
+		when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.CAUTION);
+		when(previous.getRednessLevel()).thenReturn(SkinAnalysisLevel.CAUTION);
+		when(previous.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, today.getAnalyzedAt()))
+				.thenReturn(Optional.of(previous));
+		when(reportRepository.findByCurrentSkinAnalysis_Id(todayId)).thenReturn(Optional.empty());
+		when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.of(2026, 8, 10));
+		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 10)))
+				.thenReturn(List.of());
+		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(
+				List.of(), "최근 기록에서는 특별히 두드러진 위험 요인은 보이지 않아요."));
+		when(objectMapper.writeValueAsString(any())).thenReturn("[]");
+		ArgumentCaptor<Report> reportCaptor = ArgumentCaptor.forClass(Report.class);
+		when(reportRepository.save(reportCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		reportService.generateTodayReport(USER_ID, today, todayCheckin);
+
+		// redness: CAUTION(1)->SAFE(0) 개선, trouble: SAFE(0)->CAUTION(1) 악화. 붉은기가 SAFE(개선)이므로
+		// buildOverallSentence는 WORSENED를 우선해 "다소 악화된 모습" 문구를 고른다.
+		assertThat(reportCaptor.getValue().getSummary()).isEqualTo(
+				"붉은기는 이전보다 감소했어요, 트러블은 이전보다 증가했어요. 최근 피부 상태가 다소 악화된 모습이에요. "
+						+ "최근 기록에서는 특별히 두드러진 위험 요인은 보이지 않아요."
+		);
+	}
+
+	@Test
+	void AI가_summary에_영어_상태값을_그대로_반환하면_AI_ANALYSIS_FAILED로_거부되고_저장되지_않는다() {
+		Long todayId = 70L;
+		SkinAnalysis today = skinAnalysisWithId(todayId);
+		lenient().when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 10, 9, 0));
 		lenient().when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
 		lenient().when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
 		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, today.getAnalyzedAt()))
@@ -247,20 +349,46 @@ class ReportServiceTest {
 		when(reportRepository.findByCurrentSkinAnalysis_Id(todayId)).thenReturn(Optional.empty());
 		when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
-		// 체크인은 서비스가 실제로 하는 것처럼 자정을 넘긴 KST 기준 "오늘"(8/20)로 정상 저장되어 있다.
-		Checkin todayCheckin = new Checkin(USER_ID, 7.0, 2, 1500, LocalDate.of(2026, 8, 20));
-		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 20)))
+		Checkin todayCheckin = new Checkin(USER_ID, 5.0, 1, 2000, LocalDate.of(2026, 8, 10));
+		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 10)))
 				.thenReturn(List.of());
-		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(List.of(), "요약"));
-		when(objectMapper.writeValueAsString(any())).thenReturn("[]");
-		ArgumentCaptor<Report> reportCaptor = ArgumentCaptor.forClass(Report.class);
-		when(reportRepository.save(reportCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+		// AI가 프롬프트 지침을 어기고 내부 상태값을 그대로 섞어 반환한 상황을 시뮬레이션한다.
+		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(new AiDto.CauseAnalysisResult(
+				List.of(), "최근 수면 판정이 POOR이라 피부 변화에 영향을 준 것으로 보여요."));
 
-		reportService.generateTodayReport(USER_ID, today, todayCheckin);
+		assertThatThrownBy(() -> reportService.generateTodayReport(USER_ID, today, todayCheckin))
+				.isInstanceOf(GlobalException.class)
+				.extracting("errorCode")
+				.isEqualTo(ErrorCode.AI_ANALYSIS_FAILED);
+		verify(reportRepository, never()).save(any());
+	}
 
-		// 버그가 남아있었다면(reportDate = analyzedAt.toLocalDate()) 8/19가 나왔을 것이다.
-		assertThat(reportCaptor.getValue().getReportDate()).isEqualTo(LocalDate.of(2026, 8, 20));
-		verify(checkinRepository).findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 20));
+	@Test
+	void AI가_cause_description에_영어_상태값을_그대로_반환하면_AI_ANALYSIS_FAILED로_거부되고_저장되지_않는다() {
+		Long todayId = 71L;
+		SkinAnalysis today = skinAnalysisWithId(todayId);
+		lenient().when(today.getAnalyzedAt()).thenReturn(LocalDateTime.of(2026, 8, 10, 9, 0));
+		lenient().when(today.getRednessLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		lenient().when(today.getTroubleLevel()).thenReturn(SkinAnalysisLevel.SAFE);
+		when(skinAnalysisRepository.findTopByUserIdAndAnalyzedAtLessThanOrderByAnalyzedAtDesc(USER_ID, today.getAnalyzedAt()))
+				.thenReturn(Optional.empty());
+		when(reportRepository.findByCurrentSkinAnalysis_Id(todayId)).thenReturn(Optional.empty());
+		when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+		Checkin todayCheckin = new Checkin(USER_ID, 5.0, 1, 2000, LocalDate.of(2026, 8, 10));
+		when(checkinRepository.findAllByUserIdAndCheckedDateLessThanOrderByCheckedDateDesc(USER_ID, LocalDate.of(2026, 8, 10)))
+				.thenReturn(List.of());
+		AiDto.CauseAnalysisResult leaking = new AiDto.CauseAnalysisResult(
+				List.of(new AiDto.Cause(ReportCauseFactor.SLEEP, "수면 부족", "수면 판정이 POOR로 나왔어요.")),
+				"최근 기록에서는 수면 부족이 피부 변화에 영향을 준 요인으로 보여요."
+		);
+		when(aiClient.analyzeSkinChangeCauses(any(), any())).thenReturn(leaking);
+
+		assertThatThrownBy(() -> reportService.generateTodayReport(USER_ID, today, todayCheckin))
+				.isInstanceOf(GlobalException.class)
+				.extracting("errorCode")
+				.isEqualTo(ErrorCode.AI_ANALYSIS_FAILED);
+		verify(reportRepository, never()).save(any());
 	}
 
 	@Test
