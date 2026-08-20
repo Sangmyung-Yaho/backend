@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
@@ -129,6 +130,27 @@ class IngredientRecommendationServiceTest {
 		IngredientRecommendation last = lastSaved();
 		assertThat(last.getIngredientStatus()).isEqualTo(RecommendationStatus.FAILED);
 		assertThat(last.getProductStatus()).isEqualTo(RecommendationStatus.FAILED); // 성분이 없어 제품 검색 자체가 불가능하므로 함께 FAILED
+	}
+
+	@Test
+	void FAILED_상태_저장_자체가_예외를_던져도_비동기_메서드_밖으로_예외가_전파되지_않는다() {
+		// 회귀 테스트(PROCESSING 영구 고착 버그): 배포 환경에서 ingredientStatus/productStatus가
+		// PROCESSING에서 멈추는 현상의 원인이었다 - AI 호출은 실패해 FAILED로 되돌리려 했지만, 그
+		// "FAILED로 되돌리는 save()" 자체가 DB 일시 장애(커넥션 풀 고갈 등)로 예외를 던지면 그 예외가
+		// @Async 메서드 밖으로 새 나가 Spring 기본 핸들러가 조용히 삼켰다 - 이 경우 row는 그 직전에
+		// 마지막으로 성공한 PROCESSING 상태에 영구히 머문다. 지금은 이 save() 실패를 흡수해서 메서드가
+		// 예외 없이 정상 종료돼야 한다(=이후 어떤 이유로도 응답 스레드나 다른 로직에 영향을 주지 않음).
+		when(ingredientRecommendationRepository.findBySkinAnalysisId(SKIN_ANALYSIS_ID)).thenReturn(Optional.empty());
+		when(ingredientRecommendationRepository.save(any()))
+				.thenAnswer(invocation -> invocation.getArgument(0)) // find-or-create 최초 생성 저장 - 성공
+				.thenAnswer(invocation -> invocation.getArgument(0)) // PROCESSING 표시 저장 - 성공
+				.thenThrow(new RuntimeException("DB 커넥션 풀 고갈(일시 장애 시뮬레이션)")); // FAILED 표시 저장 - 실패
+		when(aiClient.recommendIngredients(any(), any(), any())).thenThrow(new RuntimeException("AI 실패"));
+
+		assertThatCode(() -> service.generateTodayRecommendation(USER_ID, skinAnalysis()))
+				.doesNotThrowAnyException();
+
+		verifyNoInteractions(productSearchClient);
 	}
 
 	@Test
