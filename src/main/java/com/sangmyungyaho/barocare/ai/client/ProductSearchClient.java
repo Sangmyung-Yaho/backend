@@ -12,8 +12,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +53,13 @@ public class ProductSearchClient {
 
 	private static final int MAX_PRODUCTS = 3;
 
+	// 운영 로그에서 실측된 실패 원인: OpenAI가 gpt-5-nano의 조직 단위 분당 토큰 한도(TPM)를 순간적으로
+	// 초과시켜 429 Too Many Requests를 반환("Please try again in 441ms" 같은 아주 짧은 쿨다운을 응답에
+	// 직접 명시함 - 재시도하면 곧바로 풀리는 일시적 상황이다). 429만 딱 집어 한 번 재시도한다 - 다른
+	// 예외(401 인증, 응답 파싱 실패 등)는 재시도해도 결과가 달라지지 않으므로 그대로 즉시 실패 처리한다.
+	private static final int MAX_ATTEMPTS = 2;
+	private static final Duration RATE_LIMIT_RETRY_DELAY = Duration.ofSeconds(1);
+
 	private static final String SYSTEM_INSTRUCTIONS = """
 			너는 실제로 판매 중인 화장품을 웹 검색으로 찾아서 추천하는 도구다.
 
@@ -86,34 +95,67 @@ public class ProductSearchClient {
 	}
 
 	/**
-	 * 추천 성분명 목록을 근거로 실제 판매 중인 제품을 웹에서 검색해 최대 3개까지 반환한다.
+	 * 추천 성분명 목록을 근거로 실제 판매 중인 제품을 웹에서 검색해 최대 3개까지 반환한다. 검색은 됐지만
+	 * (parsed) 필수 필드 검증을 통과한 제품이 하나도 없으면(valid 0건) 예외가 아니라 빈 리스트를 그대로
+	 * 반환한다 - "검증되지 않은 제품을 억지로 채우느니 빈 결과가 낫다"는 원칙이지 "0건은 실패"라는 뜻은
+	 * 아니다(FAILED 처리는 IngredientRecommendationService가 예외를 받았을 때만 한다).
 	 *
-	 * @throws GlobalException AI_ANALYSIS_FAILED - API 호출 실패, 응답 파싱 실패, 유효한 제품이 하나도
-	 *                          없는 경우(모두 실패로 취급 - 검증되지 않은 제품을 반환하느니 빈 결과가 낫다)
+	 * 429 Too Many Requests(OpenAI TPM 한도 일시 초과)는 최대 {@value #MAX_ATTEMPTS}회까지 짧은 지연 후
+	 * 재시도한다 - OpenAI가 응답에 직접 명시하는 재시도 대기시간(보통 1초 미만)보다 넉넉하게 기다린다.
+	 * 그 외 예외(인증 실패, 응답 파싱 실패 등)는 재시도해도 결과가 바뀌지 않으므로 즉시 실패 처리한다.
+	 *
+	 * @throws GlobalException AI_ANALYSIS_FAILED - API 호출 실패(429 재시도 소진 포함) 또는 응답 파싱 실패
 	 */
 	public List<ProductSuggestion> search(List<String> ingredientNames) {
+		for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+			try {
+				return attemptSearch(ingredientNames);
+			} catch (HttpClientErrorException.TooManyRequests e) {
+				if (attempt >= MAX_ATTEMPTS) {
+					log.warn("제품 웹 검색 실패(OpenAI 429 Too Many Requests, {}회 재시도 모두 실패): ingredientNames={}",
+							MAX_ATTEMPTS, ingredientNames, e);
+					throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+				}
+				log.warn("제품 웹 검색 429 Too Many Requests(OpenAI TPM 한도 일시 초과) - {}ms 후 재시도({}/{}): ingredientNames={}",
+						RATE_LIMIT_RETRY_DELAY.toMillis(), attempt, MAX_ATTEMPTS, ingredientNames);
+				sleepQuietly(RATE_LIMIT_RETRY_DELAY);
+			} catch (Exception e) {
+				// 429 외 예외(인증 실패, 응답 파싱 실패 등)는 재시도해도 결과가 바뀌지 않으므로 즉시 실패 처리한다.
+				log.warn("제품 웹 검색 실패(OpenAI Responses API 호출 또는 응답 파싱 단계): ingredientNames={}", ingredientNames, e);
+				throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+			}
+		}
+		// 도달하지 않음(루프 마지막 반복에서 위 TooManyRequests 분기가 항상 return 또는 throw로 끝남).
+		throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
+	}
+
+	private List<ProductSuggestion> attemptSearch(List<String> ingredientNames) throws Exception {
+		String requestJson = objectMapper.writeValueAsString(buildRequestBody(ingredientNames));
+
+		String responseBody = restClient.post()
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(requestJson)
+				.retrieve()
+				.body(String.class);
+
+		String outputText = extractOutputText(responseBody);
+		List<ProductSuggestion> parsed = objectMapper.readValue(cleanJson(outputText), new TypeReference<List<ProductSuggestion>>() {
+		});
+
+		List<ProductSuggestion> valid = parsed.stream()
+				.filter(this::isValid)
+				.limit(MAX_PRODUCTS)
+				.toList();
+
+		log.info("제품 웹 검색 완료: ingredientNames={}, 검색결과={}건, 유효={}건", ingredientNames, parsed.size(), valid.size());
+		return valid;
+	}
+
+	private void sleepQuietly(Duration duration) {
 		try {
-			String requestJson = objectMapper.writeValueAsString(buildRequestBody(ingredientNames));
-
-			String responseBody = restClient.post()
-					.contentType(MediaType.APPLICATION_JSON)
-					.body(requestJson)
-					.retrieve()
-					.body(String.class);
-
-			String outputText = extractOutputText(responseBody);
-			List<ProductSuggestion> parsed = objectMapper.readValue(cleanJson(outputText), new TypeReference<List<ProductSuggestion>>() {
-			});
-
-			List<ProductSuggestion> valid = parsed.stream()
-					.filter(this::isValid)
-					.limit(MAX_PRODUCTS)
-					.toList();
-
-			log.info("제품 웹 검색 완료: ingredientNames={}, 검색결과={}건, 유효={}건", ingredientNames, parsed.size(), valid.size());
-			return valid;
-		} catch (Exception e) {
-			log.warn("제품 웹 검색 실패(OpenAI Responses API 호출 또는 응답 파싱 단계): ingredientNames={}", ingredientNames, e);
+			Thread.sleep(duration.toMillis());
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 			throw new GlobalException(ErrorCode.AI_ANALYSIS_FAILED);
 		}
 	}
